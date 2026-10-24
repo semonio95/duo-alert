@@ -4,7 +4,7 @@ duo_alert.py - Notifica push sull'iPhone quando un iPhone Duo diventa
 disponibile:
   - ritiro in uno dei 17 Apple Store italiani (ogni minuto circa)
   - Unieuro e MediaWorld online (ogni ~5 minuti)
-  - Amazon Italia, Germania, Francia, Spagna, Paesi Bassi, Belgio (a rotazione)
+  - Amazon Italia, Germania, Francia, Spagna (a rotazione, solo da computer)
 
 Gira sia su GitHub Actions (cloud, gratis) sia su un computer.
 Requisiti: Python 3.8+; consigliato `pip install curl_cffi`.
@@ -44,7 +44,9 @@ LOCALITA = ["00191", "20121", "95131"]   # insieme coprono tutti i 17 Apple Stor
 CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online
 RIVENDITORI_OGNI_SEC = 290
 CONTROLLA_AMAZON = True              # un Paese Amazon per giro, a rotazione
-AMAZON = {"it": "it-IT", "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "nl": "nl-NL", "com.be": "fr-BE"}
+# Solo gli Amazon da cui si puo' ordinare verso l'Italia (Belgio verificato: non spedisce in Italia).
+# Dal cloud Amazon blocca questi domini: li controlla lo script sul computer.
+AMAZON = {"it": "it-IT", "de": "de-DE", "fr": "fr-FR", "es": "es-ES"}
 AUTO_AGGIORNAMENTO = True            # solo su computer: scarica la versione nuova da GitHub
 UPDATE_URL = "https://raw.githubusercontent.com/semonio95/duo-alert/main/duo_alert.py"
 STATE_FILE = os.environ.get("DUO_STATE_FILE", "duo_state.json")

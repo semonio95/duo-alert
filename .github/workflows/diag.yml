@@ -10,40 +10,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Prova consegna in Italia
+      - uses: actions/checkout@v4
+      - name: Controllo completo una tantum
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 - > diag.txt 2>&1 <<'PY' || true
-          import re, json
-          from curl_cffi import requests as r
-          def txt(x): return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", x)).strip()
-          for dom, lang, asins in [("com.be", "fr-BE", ["B0HJB65YZK"]), ("nl", "nl-NL", ["B0HJB23TJP"])]:
-              s = r.Session(impersonate="chrome")
-              H = {"Accept-Language": f"{lang},{lang[:2]};q=0.9"}
-              base = f"https://www.amazon.{dom}"
-              p = s.get(f"{base}/dp/{asins[0]}", headers=H, timeout=30).text
-              print("==", dom, "dp len", len(p), "| deliver-to:", txt((re.search(r'id="glow-ingress-line2"[^>]*>(.*?)<', p, re.S) or [None, ""])[1]))
-              m = s.get(f"{base}/portal-migration/hz/glow/get-rendered-address-selections?deviceType=desktop&pageType=Detail&storeContext=wireless&actionSource=desktop-modal",
-                        headers={**H, "Accept": "text/html,*/*", "x-requested-with": "XMLHttpRequest", "Referer": f"{base}/dp/{asins[0]}"}, timeout=30)
-              tok = re.search(r'CSRF_TOKEN\s*:\s*"([^"]+)"', m.text) or re.search(r'anti-csrftoken-a2z[^"]*"\s*(?:value|content)?=?\s*"([^"]+)"', m.text)
-              print("   modal", m.status_code, len(m.text), "token:", bool(tok), "| paesi IT:", "Italie" in m.text or "Italia" in m.text or "Italië" in m.text)
-              if not tok:
-                  print("   snippet:", m.text[:300].replace("\n", " ")); continue
-              body = {"locationType": "COUNTRY", "district": "IT", "countryCode": "IT", "storeContext": "wireless",
-                      "deviceType": "web", "pageType": "Detail", "actionSource": "glow"}
-              c = s.post(f"{base}/portal-migration/hz/glow/address-change?actionSource=glow", json=body,
-                         headers={**H, "anti-csrftoken-a2z": tok.group(1), "Content-Type": "application/json",
-                                  "x-requested-with": "XMLHttpRequest", "Referer": f"{base}/dp/{asins[0]}"}, timeout=30)
-              print("   address-change", c.status_code, c.text[:200])
-              p2 = s.get(f"{base}/dp/{asins[0]}", headers=H, timeout=30).text
-              print("   dopo: deliver-to:", txt((re.search(r'id="glow-ingress-line2"[^>]*>(.*?)<', p2, re.S) or [None, ""])[1]))
-              for pat in [r"(?i)(ne peut pas être expédi[^<]{0,80})", r"(?i)(kan niet[^<]{0,80}geleverd[^<]{0,40})", r"(?i)(cannot be shipped[^<]{0,80})",
-                          r"(?i)(niet naar[^<]{0,80})", r"(?i)(n'est pas disponible[^<]{0,60}livr[^<]{0,40})", r'id="exports_desktop_undeliverable[^"]*"[^>]*>(.*?)</div>']:
-                  mm = re.search(pat, p2, re.S)
-                  if mm: print("   NON SPEDIBILE:", txt(mm.group(1))[:160])
-              print("   avail:", txt((re.search(r'id="availability"[^>]*>(.*?)</div>', p2, re.S) or [None, ""])[1])[:120])
-              print("   cart:", 'id="add-to-cart-button"' in p2, "| undeliverable id:", "undeliverable" in p2.lower())
-          PY
+          python3 -u duo_alert.py --once > diag.txt 2>&1 || true
           cat diag.txt
       - name: Pubblica risultato
         if: always()
