@@ -10,31 +10,43 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Cerca endpoint ritiro nella pagina Apple
+      - name: Test endpoint ritiro con fae=true
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
           python3 - > diag.txt 2>&1 <<'EOF' || true
+          import json, urllib.request, urllib.parse
           from curl_cffi import requests as r
-          import re
+          BUY = "https://www.apple.com/it/shop/buy-iphone/iphone-duo"
+          base = "https://www.apple.com/it/shop/fulfillment-messages"
+          params = {"fae": "true", "pl": "true", "mts.0": "regular", "mts.1": "compact",
+                    "location": "00191", "parts.0": "MK2D4QL/A", "parts.1": "MK2E4QL/A"}
+          q = base + "?" + urllib.parse.urlencode(params)
+          UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+          # 1) urllib puro (come lo script)
+          try:
+              req = urllib.request.Request(q, headers={"User-Agent": UA, "Accept": "application/json", "Accept-Language": "it-IT,it;q=0.9", "Referer": BUY})
+              with urllib.request.urlopen(req, timeout=25) as resp:
+                  t = resp.read().decode("utf-8", "replace")
+                  print("== urllib", resp.status, len(t)); print(t[:300])
+          except Exception as e:
+              print("== urllib ERRORE", e)
+          # 2) curl_cffi
           s = r.Session(impersonate="chrome")
-          url = "https://www.apple.com/it/shop/buy-iphone/iphone-duo/display-da-7,6%22-256gb-bianco-stellare"
-          b = s.get(url, headers={"Accept-Language": "it-IT,it;q=0.9"}, timeout=30)
-          html = b.text.replace("\\u002F", "/").replace("\\/", "/")
-          print("config page", b.status_code, len(html))
-          seen = set()
-          for m in re.finditer(r'(?i)(fulfil+ment|pickup|retail[A-Za-z]*Url|deliveryMessage|storeSearch|swap-?url|/shop/[a-z0-9\-/]+(message|pickup|fulfil|availability|store)[a-z0-9\-/]*)', html):
-              a = max(0, m.start() - 120); z = min(len(html), m.end() + 160)
-              snip = html[a:z].replace("\n", " ")
-              key = m.group(0).lower()[:40]
-              if key in seen and len(seen) > 5: continue
-              seen.add(key)
-              print("---", snip)
-              if len(seen) > 40: break
-          urls = sorted(set(re.findall(r'(/(?:it/)?shop/(?:[a-z0-9\-]+/)*[a-z0-9\-]*(?:message|pickup|fulfil|availability|retail|store)[a-z0-9\-/]*)', html, re.I)))
-          print("\n== PATH CANDIDATI:")
-          for u in urls[:80]: print(u)
+          f = s.get(q, headers={"Accept": "application/json", "Referer": BUY}, timeout=30)
+          print("== cffi", f.status_code, len(f.text))
+          try:
+              d = f.json()
+              stores = d["body"]["content"]["pickupMessage"]["stores"]
+              print("negozi:", len(stores))
+              for st in stores[:20]:
+                  pa = st.get("partsAvailability", {})
+                  row = {p: (v.get("pickupDisplay"), (v.get("messageTypes", {}).get("regular", {}) or {}).get("storePickupProductTitle"), v.get("pickupSearchQuote")) for p, v in pa.items()}
+                  print(st.get("storeName"), st.get("storedistance"), st.get("storeDistanceWithUnit"), json.dumps(row, ensure_ascii=False))
+              print("chiavi store:", sorted(stores[0].keys()) if stores else None)
+          except Exception as e:
+              print("parse errore:", e); print(f.text[:1500])
           EOF
-          cat diag.txt | head -c 20000
+          cat diag.txt
 
       - name: Pubblica risultato
         if: always()
