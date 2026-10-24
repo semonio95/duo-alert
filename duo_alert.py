@@ -29,7 +29,7 @@ from datetime import datetime
 # ======================= CONFIGURAZIONE =======================
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC") or "duo-alert-7q4k9x2mzt"
 INTERVALLO_SEC = 60                  # ogni quanto controllare (+/- 10 s casuali)
-SOLO_CAPACITA = ["256GB"]            # [] = qualsiasi capacita'
+SOLO_CAPACITA = []                   # es. ["256GB"]; [] = qualsiasi capacita'
 SOLO_COLORI = []                     # es. ["bianco"] oppure ["notturno"]; [] = entrambi
 MAX_KM = None                        # es. 30 = solo negozi di Roma; None = tutta Italia
 CASA = (41.94, 12.53)                # coordinate approssimative del CAP 00191
