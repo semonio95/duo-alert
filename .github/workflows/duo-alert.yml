@@ -1,0 +1,36 @@
+name: duo-alert
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: duo-alert
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ripristina stato
+        uses: actions/cache/restore@v4
+        with:
+          path: duo_state.json
+          key: duo-state-${{ github.run_id }}
+          restore-keys: duo-state-
+
+      - name: Controlla disponibilita' ritiro
+        run: python3 duo_alert.py --minutes 4
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+
+      - name: Salva stato
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: duo_state.json
+          key: duo-state-${{ github.run_id }}
