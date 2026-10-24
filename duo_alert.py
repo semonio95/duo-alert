@@ -43,7 +43,10 @@ CASA = (41.94, 12.53)                # coordinate approssimative del CAP 00191
 LOCALITA = ["00191", "20121", "95131"]   # insieme coprono tutti i 17 Apple Store italiani
 CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online
 RIVENDITORI_OGNI_SEC = 290
-CONTROLLA_AMAZON = True              # un Paese Amazon per giro, a rotazione
+CONTROLLA_AMAZON = True              # un Paese Amazon per giro, a rotazione (solo da computer)
+# Dal computer Apple va controllato meno spesso: la connessione di casa viene bloccata
+# (errore 541) se interroga Apple ogni minuto. Il cloud controlla Apple ogni minuto.
+APPLE_OGNI_SEC_COMPUTER = 240
 # Solo gli Amazon da cui si puo' ordinare verso l'Italia (Belgio verificato: non spedisce in Italia).
 # Dal cloud Amazon blocca questi domini: li controlla lo script sul computer.
 AMAZON = {"it": "it-IT", "de": "de-DE", "fr": "fr-FR", "es": "es-ES"}
@@ -399,7 +402,7 @@ def load_state():
         state = {}
     for k, v in {"notified": [], "errors": 0, "started": False, "last_retail": 0,
                  "notified_retail": [], "notified_amz": [], "amz_idx": 0, "amz_asins": {},
-                 "last_update_check": 0}.items():
+                 "last_update_check": 0, "last_apple": 0}.items():
         state.setdefault(k, v)
     return state
 
@@ -414,7 +417,11 @@ def save_state(state):
 
 def tick(state):
     retail_tick(state)
-    amazon_tick(state)
+    if WHERE != "GitHub":
+        amazon_tick(state)
+        if time.time() - state["last_apple"] < APPLE_OGNI_SEC_COMPUTER:
+            return True
+    state["last_apple"] = time.time()
     try:
         available, desc = check()
         if not state["started"]:
