@@ -1,0 +1,57 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Prova Amazon
+        run: |
+          pip install -q curl_cffi >/dev/null 2>&1
+          python3 - > diag.txt 2>&1 <<'PY' || true
+          import re, time, html
+          from curl_cffi import requests as r
+          DOM = {"it": "it-IT", "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "nl": "nl-NL", "com.be": "fr-BE", "co.uk": "en-GB"}
+          for dom, lang in DOM.items():
+              for imp in ["chrome", "safari"]:
+                  s = r.Session(impersonate=imp)
+                  u = f"https://www.amazon.{dom}/s?k=apple+iphone+duo"
+                  try:
+                      x = s.get(u, headers={"Accept-Language": f"{lang},{lang[:2]};q=0.9"}, timeout=30)
+                  except Exception as e:
+                      print(dom, imp, "ERR", e); continue
+                  t = x.text
+                  cap = "captcha" in t.lower() or "validateCaptcha" in t
+                  items = re.findall(r'data-asin="(B0[A-Z0-9]{8})"[^>]*data-component-type="s-search-result"', t)
+                  titles = []
+                  for a in dict.fromkeys(items):
+                      m = re.search(r'data-asin="%s".{0,6000}?<h2[^>]*>(.*?)</h2>' % a, t, re.S)
+                      ttl = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+                      if "duo" in ttl.lower(): titles.append((a, html.unescape(ttl)[:90]))
+                  print(f"{dom:6} {imp:6} {x.status_code} len={len(t)} captcha={cap} risultati={len(items)} duo={titles[:8]}")
+                  if titles and not cap:
+                      a = titles[0][0]
+                      p = s.get(f"https://www.amazon.{dom}/dp/{a}", headers={"Accept-Language": f"{lang},{lang[:2]};q=0.9"}, timeout=30)
+                      pt = p.text
+                      av = re.search(r'id="availability".{0,600}?<span[^>]*>(.*?)</span>', pt, re.S)
+                      print("   dp", a, p.status_code, "captcha" in pt.lower(), "| avail:", re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", av.group(1))).strip()[:120] if av else None,
+                            "| add-to-cart:", "add-to-cart-button" in pt, "| preorder:", bool(re.search(r"(?i)pre-?ord|vorbestell|précommand|reserva", pt)),
+                            "| price:", (re.search(r'class="a-price-whole">([\d.,]+)', pt) or [None, None])[1],
+                            "| merchant:", (re.search(r'(?:Venduto da|Verkauf durch|Vendu par|Vendido por|Sold by|Verkocht door)[^<]{0,5}</span>.{0,400}?<span[^>]*>([^<]{2,60})<', pt, re.S) or [None, None])[1])
+                      break
+                  time.sleep(2)
+          PY
+          cat diag.txt
+
+      - name: Pubblica risultato
+        if: always()
+        run: |
+          mkdir -p /tmp/l && cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m diag
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag
