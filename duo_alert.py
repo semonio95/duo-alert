@@ -208,7 +208,13 @@ def tick(state, where):
         return True
     except Exception as e:
         state["errors"] += 1
-        log(f"Errore #{state['errors']}: {e}")
+        detail = ""
+        if hasattr(e, "read"):
+            try:
+                detail = " | risposta: " + e.read()[:300].decode("utf-8", "replace").replace("\n", " ")
+            except Exception:
+                pass
+        log(f"Errore #{state['errors']}: {type(e).__name__}: {e}{detail}")
         if state["errors"] == 5:
             notify("Monitor iPhone Duo: problema",
                    f"5 errori di fila (ultimo: {str(e)[:150]}). Il monitor continua a riprovare.",

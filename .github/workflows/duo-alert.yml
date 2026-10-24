@@ -13,6 +13,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +26,7 @@ jobs:
           restore-keys: duo-state-
 
       - name: Controlla disponibilita' ritiro
-        run: python3 duo_alert.py --minutes 4
+        run: python3 -u duo_alert.py --minutes 4 2>&1 | tee run.log
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
 
@@ -34,3 +36,12 @@ jobs:
         with:
           path: duo_state.json
           key: duo-state-${{ github.run_id }}
+
+      - name: Pubblica ultimo log (branch "logs")
+        if: always()
+        run: |
+          mkdir -p /tmp/l && cp run.log /tmp/l/ultimo_log.txt 2>/dev/null || echo "nessun log" > /tmp/l/ultimo_log.txt
+          cd /tmp/l && git init -q && git checkout -q -b logs
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m "Log run ${{ github.run_id }}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" logs
