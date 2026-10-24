@@ -1,0 +1,53 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    steps:
+      - name: Test raggiungibilita' Apple
+        run: |
+          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+          BUY='https://www.apple.com/it/shop/buy-iphone/iphone-duo'
+          FUL='https://www.apple.com/it/shop/fulfillment-messages?pl=true&mts.0=regular&mts.1=compact&location=00191&parts.0=MK2D4QL/A'
+          {
+            echo "== IP pubblico"; curl -s https://api.ipify.org; echo
+            echo "== curl buy";  curl -s -o /tmp/b.html -w "%{http_code} %{size_download}\n" -A "$UA" -H 'Accept-Language: it-IT,it;q=0.9' "$BUY"
+            echo "== curl fulfillment"; curl -s -o /tmp/f.json -w "%{http_code} %{size_download}\n" -A "$UA" -H 'Accept: application/json' -H "Referer: $BUY" "$FUL"; head -c 300 /tmp/f.json; echo
+            pip install -q curl_cffi >/dev/null 2>&1 && echo "curl_cffi installato"
+            python3 - <<'EOF'
+          from curl_cffi import requests as r
+          import re
+          s = r.Session(impersonate="chrome")
+          b = s.get("https://www.apple.com/it/shop/buy-iphone/iphone-duo", headers={"Accept-Language": "it-IT,it;q=0.9"}, timeout=30)
+          html = b.text.replace("\\u002F", "/")
+          print("== cffi buy", b.status_code, len(b.text))
+          links = sorted(set(re.findall(r'/it/shop/buy-iphone/iphone-duo/[^"\'\s<>?#]+', html)))
+          print("link config:", len(links))
+          parts = set(re.findall(r"\b(M[A-Z0-9]{4}[A-Z]{2}/A)\b", html))
+          if links:
+              c = s.get("https://www.apple.com" + links[0], timeout=30)
+              t = c.text.replace("\\u002F", "/")
+              print("== cffi config", c.status_code, len(c.text))
+              parts |= set(re.findall(r"\b(M[A-Z0-9]{4}[A-Z]{2}/A)\b", t))
+          print("codici trovati:", sorted(parts))
+          p = sorted(x for x in parts if x.endswith("QL/A")) or ["MK2D4QL/A"]
+          f = s.get("https://www.apple.com/it/shop/fulfillment-messages", params={"pl": "true", "mts.0": "regular", "mts.1": "compact", "location": "00191", "parts.0": p[0]}, headers={"Accept": "application/json", "Referer": "https://www.apple.com/it/shop/buy-iphone/iphone-duo"}, timeout=30)
+          print("== cffi fulfillment", p[0], f.status_code, len(f.text))
+          print(f.text[:1500])
+          EOF
+          } > diag.txt 2>&1 || true
+          cat diag.txt
+
+      - name: Pubblica risultato
+        if: always()
+        run: |
+          mkdir -p /tmp/l && cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m diag
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag
