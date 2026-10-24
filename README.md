@@ -1,12 +1,9 @@
 # duo-alert
 
-Notifica push (app ntfy) quando un iPhone Duo diventa ritirabile in un Apple Store italiano.
+Notifica push (app ntfy) quando un iPhone Duo diventa ritirabile in uno qualsiasi dei 17 Apple Store italiani.
 
-Va eseguito da un computer sulla connessione di casa: Apple blocca l'API di disponibilità per le richieste che arrivano da server cloud (verificato da GitHub Actions, anche con un browser Chromium vero).
+- **Cloud (GitHub Actions):** il workflow `monitor` parte ogni 5 minuti e controlla circa ogni minuto. L'ultimo log è nel branch `logs`.
+- **Computer:** `pip install curl_cffi && python3 duo_alert.py`
+- **Controllo singolo:** `python3 duo_alert.py --once`
 
-```
-pip install curl_cffi        # consigliato, non obbligatorio
-python3 duo_alert.py         # Mac: caffeinate -i python3 duo_alert.py
-```
-
-I codici prodotto italiani (MK2D4QL/A … MK2L4QL/A) vengono letti in automatico dalle pagine Apple.
+Filtri (capacità, colore, distanza) in cima a `duo_alert.py`. Per fermarlo: Actions → monitor → "Disable workflow".
