@@ -6,56 +6,39 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 6
     permissions:
       contents: write
     steps:
-      - name: Controllo stock ora
+      - name: Mappa codici e campi negozio
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 - > diag.txt 2>&1 <<'EOF' || true
-          import json, time
+          python3 - > diag.txt 2>&1 <<'PY' || true
+          import re, json, urllib.parse
           from curl_cffi import requests as r
           s = r.Session(impersonate="chrome")
-          H = {"Accept": "application/json", "Accept-Language": "it-IT,it;q=0.9", "Referer": "https://www.apple.com/it/shop/buy-iphone/iphone-duo"}
-          s.get("https://www.apple.com/it/shop/buy-iphone/iphone-duo", timeout=30)
-          PARTS = ["MK2D4QL/A","MK2E4QL/A","MK2F4QL/A","MK2G4QL/A","MK2H4QL/A","MK2J4QL/A","MK2K4QL/A","MK2L4QL/A"]
-          print("=== SBA availability-message (00191)")
-          for p in PARTS:
-              x = s.get("https://www.apple.com/it/shop/sba/availability-message", params={"parts.0": p, "location": "00191"}, headers=H, timeout=30)
-              try:
-                  c = x.json()["body"]["content"][0]
-                  print(p, x.status_code, "stores:", c.get("partAvailableStoresCount"), "any:", c.get("availableAtAnyStore"),
-                        "| pickup:", json.dumps(c.get("pickupMessage") or c.get("storePickupMessage") or "", ensure_ascii=False)[:200])
-              except Exception as e:
-                  print(p, x.status_code, "parse", e, x.text[:200])
-              time.sleep(1)
-          x = s.get("https://www.apple.com/it/shop/sba/availability-message", params={"parts.0": PARTS[0], "location": "00191"}, headers=H, timeout=30)
-          print("\n=== SBA JSON completo esempio:\n", x.text[:2500])
-          seen = {}
-          for loc in ["00191", "20121", "80133", "10121", "40121", "50123", "95131", "70121", "35131", "47921"]:
-              q = {"pl": "true", "location": loc}
-              for i, p in enumerate(PARTS): q[f"parts.{i}"] = p
-              x = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, headers=H, timeout=30)
-              try:
-                  st = x.json()["body"]["stores"]
-              except Exception as e:
-                  print("LOC", loc, x.status_code, "parse", e, x.text[:200]); continue
-              for t in st:
-                  name = t.get("storeName")
-                  if name in seen: continue
-                  pa = t.get("partsAvailability") or {}
-                  av = {k: v.get("pickupDisplay") for k, v in pa.items()}
-                  ttl = {k: v.get("storePickupProductTitle") for k, v in pa.items()}
-                  seen[name] = (t.get("city"), av, ttl, {k: v.get("pickupSearchQuote") for k, v in pa.items()})
-              time.sleep(1)
-          print("\n=== RETAIL pickup-message: negozi trovati", len(seen))
-          for n, (city, av, ttl, q) in seen.items():
-              avail = [ttl.get(k) or k for k, v in av.items() if v == "available"]
-              print(f"{n} ({city}): {'DISPONIBILE ' + str(avail) if avail else 'nessuno'} | stati: {sorted(set(av.values()))}")
-          one = next(iter(seen.values()), None)
-          if one: print("\ntitoli:", one[2]); print("quote:", one[3])
-          EOF
+          base = "https://www.apple.com/it/shop/buy-iphone/iphone-duo"
+          h = s.get(base, timeout=30).text.replace("\\u002F", "/")
+          links = sorted(set(re.findall(r'/it/shop/buy-iphone/iphone-duo/[^"\'\s<>?#]+', h)))
+          for l in links:
+              t = s.get("https://www.apple.com" + l, timeout=30).text.replace("\\u002F", "/")
+              ld = re.findall(r'<script type="application/ld\+json"[^>]*>(.*?)</script>', t, re.S)
+              skus = re.findall(r'"sku"\s*:\s*"(M[A-Z0-9]{4}QL/A)', " ".join(ld))
+              near = re.findall(r'"name"\s*:\s*"([^"]{0,80})"[^{}]{0,300}?"sku"\s*:\s*"(M[A-Z0-9]{4}QL/A)', t)
+              slug = urllib.parse.unquote(l.rsplit("/", 1)[-1])
+              print(slug, "| ld skus:", skus[:4], "| name~sku:", near[:3])
+          q = {"pl": "true", "location": "00191", "parts.0": "MK2D4QL/A"}
+          x = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, timeout=30).json()
+          st = x["body"]["stores"]
+          print("n negozi per 00191:", len(st))
+          print("chiavi store:", sorted(st[0].keys()))
+          print("esempio:", json.dumps({k: st[0][k] for k in st[0] if k not in ("retailStore","storeHours","partsAvailability")}, ensure_ascii=False)[:800])
+          print("parts esempio:", json.dumps(st[0]["partsAvailability"], ensure_ascii=False)[:800])
+          for loc in ["20121", "10121", "95131"]:
+              y = s.get("https://www.apple.com/it/shop/retail/pickup-message", params={**q, "location": loc}, timeout=30).json()
+              print(loc, [z.get("storeName") for z in y["body"]["stores"]])
+          print("00191", [z.get("storeName") for z in st])
+          PY
           cat diag.txt
 
       - name: Pubblica risultato
