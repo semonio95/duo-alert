@@ -20,6 +20,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -48,6 +49,22 @@ MODELLI = {  # codici italiani letti dalle pagine Apple (24/10/2026)
     "MK2K4QL/A": "2TB Bianco stellare",
     "MK2L4QL/A": "2TB Cielo notturno",
 }
+
+CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online, ogni ~5 minuti
+RIVENDITORI_OGNI_SEC = 290
+
+_UNIEURO = "https://www.unieuro.it/online/iPhone/iPhone-Duo-{}-pidAPLIPHONEDUO{}"
+UNIEURO = {
+    "256GB Bianco stellare": _UNIEURO.format("256GB-Bianco-stellare", "256W"),
+    "256GB Cielo notturno": _UNIEURO.format("256GB-Cielo-notturno", "256"),
+    "512GB Bianco stellare": _UNIEURO.format("512GB-Bianco-stellare", "512W"),
+    "512GB Cielo notturno": _UNIEURO.format("512GB-Cielo-notturno", "512"),
+    "1TB Bianco stellare": _UNIEURO.format("1TB-Bianco-stellare", "1TBW"),
+    "1TB Cielo notturno": _UNIEURO.format("1TB-Cielo-notturno", "1TB"),
+    "2TB Bianco stellare": _UNIEURO.format("2TB-Bianco-stellare", "2TBW"),
+    "2TB Cielo notturno": _UNIEURO.format("2TB-Cielo-notturno", "2TB"),
+}
+MEDIAWORLD_START = "https://www.mediaworld.it/it/product/_apple-iphone-duo-256gb-star-white-596069.html"
 
 BUY_URL = "https://www.apple.com/it/shop/buy-iphone/iphone-duo"
 PICKUP_URL = "https://www.apple.com/it/shop/retail/pickup-message"
@@ -81,11 +98,11 @@ def http_get(url, accept="application/json"):
         return r.read().decode("utf-8", "replace")
 
 
-def notify(title, body, priority="urgent", tags="iphone,rotating_light"):
+def notify(title, body, priority="urgent", tags="iphone,rotating_light", click=BUY_URL):
     """Notifica push via ntfy. Il titolo resta ASCII per compatibilita'."""
     req = urllib.request.Request(
         NTFY_URL, data=body.encode("utf-8"), method="POST",
-        headers={"Title": title, "Priority": priority, "Tags": tags, "Click": BUY_URL})
+        headers={"Title": title, "Priority": priority, "Tags": tags, "Click": click})
     try:
         urllib.request.urlopen(req, timeout=15).read()
     except Exception as e:
@@ -139,6 +156,66 @@ def check():
     return available, len(seen)
 
 
+_IN_STOCK = {"instock", "lowstock", "limitedavailability", "instoreonly"}
+
+
+def check_retailers():
+    """Prodotti acquistabili subito online. Ritorna {chiave: (descrizione, url)}."""
+    found = {}
+    for model, url in UNIEURO.items():
+        if not wanted(model):
+            continue
+        try:
+            t = http_get(url, accept="text/html")
+        except Exception as e:
+            log(f"Unieuro {model}: pagina non letta ({getattr(e, 'code', e)})")
+            continue
+        m = re.search(r'"stock":\{"stockLevel":(\d+),"stockLevelStatus":"(\w+)"', t)
+        if m and (int(m.group(1)) > 0 or m.group(2).lower() in _IN_STOCK):
+            found["unieuro|" + model] = (f"Unieuro online: {model}", url)
+        time.sleep(1)
+    try:
+        start = http_get(MEDIAWORLD_START, accept="text/html")
+        pages = {MEDIAWORLD_START} | set(re.findall(
+            r"https://www\.mediaworld\.it/it/product/_apple-iphone-duo-[a-z0-9\-]+\.html", start))
+    except Exception as e:
+        log(f"MediaWorld: pagina non letta ({getattr(e, 'code', e)})")
+        start, pages = "", set()
+    for url in sorted(pages):
+        label = url.rsplit("/_apple-iphone-duo-", 1)[-1].rsplit("-", 1)[0].replace("-", " ")
+        if not wanted(label):
+            continue
+        try:
+            t = start if url == MEDIAWORLD_START else http_get(url, accept="text/html")
+        except Exception as e:
+            log(f"MediaWorld {label}: pagina non letta ({getattr(e, 'code', e)})")
+            continue
+        m = re.search(r'"availability":"https://schema\.org/(\w+)","url":"' + re.escape(url), t)
+        if m and m.group(1).lower() in _IN_STOCK:
+            found["mediaworld|" + label] = (f"MediaWorld online: {label}", url)
+        time.sleep(1)
+    return found
+
+
+def retail_tick(state):
+    if not CONTROLLA_RIVENDITORI or time.time() - state["last_retail"] < RIVENDITORI_OGNI_SEC:
+        return
+    state["last_retail"] = time.time()
+    try:
+        found = check_retailers()
+    except Exception as e:
+        log(f"Rivenditori: errore ({e})")
+        return
+    new = set(found) - set(state["notified_retail"])
+    for k in sorted(new):
+        desc, url = found[k]
+        notify("iPhone Duo DISPONIBILE online!", desc + "\nCompra subito dal link.", click=url)
+        log("RIVENDITORE DISPONIBILE -> " + desc + " " + url)
+    if not found:
+        log("Rivenditori (Unieuro, MediaWorld): niente disponibile")
+    state["notified_retail"] = sorted(found)
+
+
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -148,6 +225,8 @@ def load_state():
     state.setdefault("notified", [])
     state.setdefault("errors", 0)
     state.setdefault("started", False)
+    state.setdefault("last_retail", 0)
+    state.setdefault("notified_retail", [])
     return state
 
 
@@ -160,6 +239,7 @@ def save_state(state):
 
 
 def tick(state, where):
+    retail_tick(state)
     try:
         available, n_stores = check()
         if not state["started"]:
@@ -218,6 +298,12 @@ def main():
             log(f"DISPONIBILE: {v['model']} - {store} ({v['city']})")
         if not available:
             log("Nessun iPhone Duo disponibile al ritiro in Italia")
+        if CONTROLLA_RIVENDITORI:
+            found = check_retailers()
+            for desc, url in found.values():
+                log(f"DISPONIBILE: {desc} {url}")
+            if not found:
+                log("Rivenditori (Unieuro, MediaWorld): niente disponibile")
         return
     log(f"Avvio monitor iPhone Duo - {where} - curl_cffi: {'si' if _session else 'no'}")
     state = load_state()
