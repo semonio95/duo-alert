@@ -12,9 +12,10 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 15
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +30,7 @@ jobs:
         run: pip install -q curl_cffi
 
       - name: Controlla disponibilita' ritiro (tutta Italia)
-        run: python3 -u duo_alert.py --minutes 5 2>&1 | tee run.log
+        run: python3 -u duo_alert.py --minutes 9 2>&1 | tee run.log
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
 
@@ -48,3 +49,9 @@ jobs:
           git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
           git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m "Log run ${{ github.run_id }}"
           git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" logs
+
+      - name: Avvia il giro successivo (catena continua)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run monitor.yml --ref main -R ${{ github.repository }}
