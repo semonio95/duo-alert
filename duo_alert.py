@@ -440,8 +440,11 @@ def tick(state):
                      f"{v['model']} - Apple {store} ({v['city']}"
                      + (f", {v['km']:.0f} km" if v["km"] is not None else "") + ")"
                      for (store, _), v in rows[:8]]
+            first_part = rows[0][0][1]
+            slug = MODELLI.get(first_part, "").lower().replace(" ", "-")
+            click = f"{BUY_URL}/display-da-7,6%22-{slug}" if slug else BUY_URL
             notify("iPhone Duo DISPONIBILE al ritiro!", "\n".join(lines) +
-                   "\nApri l'app Apple Store e prenota subito il ritiro.")
+                   "\nTocca per aprire il modello e prenota subito il ritiro.", click=click)
             log("DISPONIBILE -> " + " | ".join(lines))
         elif hits:
             log(f"Ancora disponibile ({len(hits)} slot, gia' notificato)")
