@@ -3,22 +3,29 @@
 duo_alert.py - Notifica push sull'iPhone quando un iPhone Duo diventa
 ritirabile in un Apple Store italiano.
 
-Requisiti: Python 3.8+ (nessuna libreria da installare).
+Requisiti: Python 3.8+. Consigliato: pip install curl_cffi (le richieste
+sembrano quelle di Chrome); senza, funziona lo stesso con urllib.
 Notifiche: app gratuita "ntfy" sull'iPhone, iscritta al topic NTFY_TOPIC.
 
+Va eseguito da una connessione di casa: Apple blocca l'API di disponibilita'
+quando le richieste arrivano da server cloud (GitHub, VM, ecc.).
+
 Uso:
-  python3 duo_alert.py               # gira per sempre (PC, Mac, VM)
-  python3 duo_alert.py --minutes 4   # gira 4 minuti ed esce (GitHub Actions)
+  Mac:      caffeinate -i python3 duo_alert.py
+  Windows:  py duo_alert.py
+  Opzione:  --minutes N  (gira N minuti ed esce)
 Fermare: Ctrl+C
 """
 
 import argparse
 import http.cookiejar
+import io
 import json
 import os
 import random
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -43,18 +50,28 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
 _jar = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_jar))
 
+# Se installato (pip install curl_cffi), le richieste si presentano come Chrome:
+# piu' difficile che Apple le scambi per un bot. Altrimenti si usa urllib.
+try:
+    from curl_cffi import requests as _cffi
+    _session = _cffi.Session(impersonate="chrome")
+except Exception:
+    _session = None
+
 
 def log(msg):
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
 def http_get(url, accept="text/html,application/json;q=0.9,*/*;q=0.8"):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": UA,
-        "Accept": accept,
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Referer": BUY_URL,
-    })
+    headers = {"Accept": accept, "Accept-Language": "it-IT,it;q=0.9", "Referer": BUY_URL}
+    if _session is not None:
+        r = _session.get(url, headers=headers, timeout=25)
+        if r.status_code >= 400:
+            raise urllib.error.HTTPError(url, r.status_code, f"HTTP {r.status_code}",
+                                         None, io.BytesIO(r.content))
+        return r.text
+    req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
     with _opener.open(req, timeout=25) as r:
         return r.read().decode("utf-8", "replace")
 
@@ -111,7 +128,8 @@ def check(parts):
     available, titles = {}, {}
     for i in range(0, len(parts), 4):  # max 4 codici per richiesta
         chunk = parts[i:i + 4]
-        params = {"pl": "true", "mts.0": "regular", "mts.1": "compact", "location": CAP}
+        params = {"fae": "true", "pl": "true", "mts.0": "regular", "mts.1": "compact",
+                  "location": CAP}
         for j, p in enumerate(chunk):
             params[f"parts.{j}"] = p
         raw = http_get(FULFILL_URL + "?" + urllib.parse.urlencode(params),
@@ -214,6 +232,8 @@ def tick(state, where):
                 detail = " | risposta: " + e.read()[:300].decode("utf-8", "replace").replace("\n", " ")
             except Exception:
                 pass
+        if getattr(e, "code", None) == 541:
+            detail = " | Apple sta bloccando le richieste da questa rete"
         log(f"Errore #{state['errors']}: {type(e).__name__}: {e}{detail}")
         if state["errors"] == 5:
             notify("Monitor iPhone Duo: problema",
