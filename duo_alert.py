@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """
 duo_alert.py - Notifica push sull'iPhone quando un iPhone Duo diventa
-ritirabile in un Apple Store italiano (tutti i 17 negozi).
+disponibile:
+  - ritiro in uno dei 17 Apple Store italiani (ogni minuto circa)
+  - Unieuro e MediaWorld online (ogni ~5 minuti)
+  - Amazon Italia, Germania, Francia, Spagna, Paesi Bassi, Belgio (a rotazione)
 
 Gira sia su GitHub Actions (cloud, gratis) sia su un computer.
 Requisiti: Python 3.8+; consigliato `pip install curl_cffi`.
 Notifiche: app gratuita "ntfy" sull'iPhone, iscritta al topic NTFY_TOPIC.
+Su un computer si aggiorna da solo quando cambia la versione su GitHub.
 
 Uso:
-  python3 duo_alert.py               # gira per sempre, controllo ogni minuto
-  python3 duo_alert.py --minutes 4   # gira 4 minuti ed esce (GitHub Actions)
-  python3 duo_alert.py --once        # un solo controllo, stampa lo stato
+  python3 duo_alert.py               # gira per sempre
+  python3 duo_alert.py --minutes 9   # gira 9 minuti ed esce (GitHub Actions)
+  python3 duo_alert.py --once        # un solo controllo completo, stampa lo stato
 """
 
 import argparse
+import html
 import http.cookiejar
 import io
 import json
@@ -21,6 +26,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -34,8 +40,13 @@ SOLO_CAPACITA = []                   # es. ["256GB"]; [] = qualsiasi capacita'
 SOLO_COLORI = []                     # es. ["bianco"] oppure ["notturno"]; [] = entrambi
 MAX_KM = None                        # es. 30 = solo negozi di Roma; None = tutta Italia
 CASA = (41.94, 12.53)                # coordinate approssimative del CAP 00191
-# Ricerche che insieme coprono tutti i 17 Apple Store italiani
-LOCALITA = ["00191", "20121", "95131"]
+LOCALITA = ["00191", "20121", "95131"]   # insieme coprono tutti i 17 Apple Store italiani
+CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online
+RIVENDITORI_OGNI_SEC = 290
+CONTROLLA_AMAZON = True              # un Paese Amazon per giro, a rotazione
+AMAZON = {"it": "it-IT", "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "nl": "nl-NL", "com.be": "fr-BE"}
+AUTO_AGGIORNAMENTO = True            # solo su computer: scarica la versione nuova da GitHub
+UPDATE_URL = "https://raw.githubusercontent.com/semonio95/duo-alert/main/duo_alert.py"
 STATE_FILE = os.environ.get("DUO_STATE_FILE", "duo_state.json")
 # ==============================================================
 
@@ -49,9 +60,9 @@ MODELLI = {  # codici italiani letti dalle pagine Apple (24/10/2026)
     "MK2K4QL/A": "2TB Bianco stellare",
     "MK2L4QL/A": "2TB Cielo notturno",
 }
-
-CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online, ogni ~5 minuti
-RIVENDITORI_OGNI_SEC = 290
+# ASIN gia' noti (uguali su tutti gli Amazon europei); gli altri si trovano con la ricerca
+AMAZON_ASIN_NOTI = {"B0HJB65YZK": "1TB Cielo notturno", "B0HJB23TJP": "256GB Cielo notturno",
+                    "B0HJB16BGD": "256GB Bianco stellare"}
 
 _UNIEURO = "https://www.unieuro.it/online/iPhone/iPhone-Duo-{}-pidAPLIPHONEDUO{}"
 UNIEURO = {
@@ -68,33 +79,46 @@ MEDIAWORLD_START = "https://www.mediaworld.it/it/product/_apple-iphone-duo-256gb
 
 BUY_URL = "https://www.apple.com/it/shop/buy-iphone/iphone-duo"
 PICKUP_URL = "https://www.apple.com/it/shop/retail/pickup-message"
+SBA_URL = "https://www.apple.com/it/shop/sba/availability-message"
 NTFY_URL = "https://ntfy.sh/" + NTFY_TOPIC
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
       "(KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+WHERE = "GitHub" if os.environ.get("GITHUB_ACTIONS") else "computer"
 
-_jar = http.cookiejar.CookieJar()
-_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_jar))
 try:
     from curl_cffi import requests as _cffi
-    _session = _cffi.Session(impersonate="chrome")
 except Exception:
-    _session = None
+    _cffi = None
+
+
+def new_session(imp="chrome"):
+    if _cffi is not None:
+        return _cffi.Session(impersonate=imp)
+    jar = http.cookiejar.CookieJar()
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+
+_apple = new_session()
+_other = new_session()
 
 
 def log(msg):
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
-def http_get(url, accept="application/json"):
-    headers = {"Accept": accept, "Accept-Language": "it-IT,it;q=0.9", "Referer": BUY_URL}
-    if _session is not None:
-        r = _session.get(url, headers=headers, timeout=25)
+def http_get(url, accept="application/json", lang="it-IT,it;q=0.9", referer=BUY_URL, session=None):
+    s = session or _other
+    headers = {"Accept": accept, "Accept-Language": lang}
+    if referer:
+        headers["Referer"] = referer
+    if _cffi is not None:
+        r = s.get(url, headers=headers, timeout=25)
         if r.status_code >= 400:
             raise urllib.error.HTTPError(url, r.status_code, f"HTTP {r.status_code}",
                                          None, io.BytesIO(r.content))
         return r.text
     req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
-    with _opener.open(req, timeout=25) as r:
+    with s.open(req, timeout=25) as r:
         return r.read().decode("utf-8", "replace")
 
 
@@ -109,6 +133,17 @@ def notify(title, body, priority="urgent", tags="iphone,rotating_light", click=B
         log(f"ATTENZIONE: notifica non inviata ({e})")
 
 
+def wanted(name):
+    t = re.sub(r"(\d)to\b", r"\1tb", re.sub(r"(\d)go\b", r"\1gb", name.replace(" ", "").lower()))
+    if SOLO_CAPACITA and not any(c.replace(" ", "").lower() in t for c in SOLO_CAPACITA):
+        return False
+    if SOLO_COLORI and not any(c.lower() in t for c in SOLO_COLORI):
+        return False
+    return True
+
+
+# ---------------------------- Apple ----------------------------
+
 def km_da_casa(store):
     try:
         la, lo = float(store["storelatitude"]), float(store["storelongitude"])
@@ -120,23 +155,13 @@ def km_da_casa(store):
     return 6371 * 2 * math.asin(math.sqrt(a))
 
 
-def wanted(name):
-    t = name.replace(" ", "").lower()
-    if SOLO_CAPACITA and not any(c.replace(" ", "").lower() in t for c in SOLO_CAPACITA):
-        return False
-    if SOLO_COLORI and not any(c.lower() in t for c in SOLO_COLORI):
-        return False
-    return True
-
-
-def check():
-    """Ritorna (disponibili, n_negozi). disponibili = {(negozio, part): info}."""
+def _check_pickup():
     available, seen = {}, set()
     for loc in LOCALITA:
         params = {"pl": "true", "location": loc}
         for i, p in enumerate(MODELLI):
             params[f"parts.{i}"] = p
-        data = json.loads(http_get(PICKUP_URL + "?" + urllib.parse.urlencode(params)))
+        data = json.loads(http_get(PICKUP_URL + "?" + urllib.parse.urlencode(params), session=_apple))
         stores = (data.get("body") or {}).get("stores")
         if stores is None:
             raise ValueError("formato risposta Apple inatteso (manca 'stores')")
@@ -148,13 +173,54 @@ def check():
             km = km_da_casa(s)
             for part, info in (s.get("partsAvailability") or {}).items():
                 if info.get("pickupDisplay") == "available":
-                    available[(name, part)] = {
-                        "km": km, "city": s.get("city", ""),
-                        "model": MODELLI.get(part, part),
-                        "quote": (info.get("pickupSearchQuote") or "").strip()}
+                    available[(name, part)] = {"km": km, "city": s.get("city", ""),
+                                               "model": MODELLI.get(part, part)}
         time.sleep(1)
-    return available, len(seen)
+    return available, f"{len(seen)} negozi"
 
+
+def _check_sba():
+    """Riserva: conteggio negozi con disponibilita' per ogni modello."""
+    available = {}
+    for part, model in MODELLI.items():
+        data = json.loads(http_get(SBA_URL + "?" + urllib.parse.urlencode(
+            {"parts.0": part, "location": "00191"}), session=_apple))
+        c = ((data.get("body") or {}).get("content") or [{}])[0]
+        n = int(c.get("partAvailableStoresCount") or 0)
+        if n > 0 or c.get("availableAtAnyStore"):
+            available[(f"disponibile in {max(n, 1)} Apple Store", part)] = {
+                "km": None, "city": "", "model": model, "raw": True}
+        time.sleep(1)
+    return available, "Apple Store (metodo di riserva)"
+
+
+_pickup_pausa_fino = 0
+
+
+def check():
+    """Ritorna (disponibili, descrizione). disponibili = {(negozio, part): info}."""
+    global _apple, _pickup_pausa_fino
+    if time.time() < _pickup_pausa_fino:
+        return _check_sba()
+    try:
+        return _check_pickup()
+    except urllib.error.HTTPError as e:
+        if e.code not in (403, 429, 503, 541):
+            raise
+        log(f"Apple ha risposto {e.code}: nuova sessione e riprovo")
+        _apple = new_session(random.choice(["chrome", "safari"]) if _cffi else "chrome")
+        time.sleep(3)
+        try:
+            return _check_pickup()
+        except urllib.error.HTTPError as e2:
+            if e2.code not in (403, 429, 503, 541):
+                raise
+            log(f"Apple ha risposto ancora {e2.code}: metodo di riserva per 10 minuti")
+            _pickup_pausa_fino = time.time() + 600
+            return _check_sba()
+
+
+# ------------------------ Unieuro / MediaWorld ------------------------
 
 _IN_STOCK = {"instock", "lowstock", "limitedavailability", "instoreonly"}
 
@@ -166,7 +232,7 @@ def check_retailers():
         if not wanted(model):
             continue
         try:
-            t = http_get(url, accept="text/html")
+            t = http_get(url, accept="text/html", referer=None)
         except Exception as e:
             log(f"Unieuro {model}: pagina non letta ({getattr(e, 'code', e)})")
             continue
@@ -175,7 +241,7 @@ def check_retailers():
             found["unieuro|" + model] = (f"Unieuro online: {model}", url)
         time.sleep(1)
     try:
-        start = http_get(MEDIAWORLD_START, accept="text/html")
+        start = http_get(MEDIAWORLD_START, accept="text/html", referer=None)
         pages = {MEDIAWORLD_START} | set(re.findall(
             r"https://www\.mediaworld\.it/it/product/_apple-iphone-duo-[a-z0-9\-]+\.html", start))
     except Exception as e:
@@ -186,7 +252,7 @@ def check_retailers():
         if not wanted(label):
             continue
         try:
-            t = start if url == MEDIAWORLD_START else http_get(url, accept="text/html")
+            t = start if url == MEDIAWORLD_START else http_get(url, accept="text/html", referer=None)
         except Exception as e:
             log(f"MediaWorld {label}: pagina non letta ({getattr(e, 'code', e)})")
             continue
@@ -197,6 +263,114 @@ def check_retailers():
     return found
 
 
+# ---------------------------- Amazon ----------------------------
+
+_AMZ_NO = re.compile(r"(?i)(non disponibile|nicht verf[üu]gbar|nicht auf lager|rupture de stock|"
+                     r"indisponible|no disponible|sin stock|niet op voorraad|niet beschikbaar|"
+                     r"currently unavailable|out of stock|temporarily)")
+_AMZ_PRE = re.compile(r"(?i)(pre-?ordin|preordine|vorbestell|erscheint am|pr[ée]commande|"
+                      r"sera disponible le|reserva|pre-?order|disponibile dal|disponibile a partire|"
+                      r"verschijnt op|vooruitbestel)")
+_AMZ_SI = re.compile(r"(?i)(disponibilit[aà] immediata|\bdisponibile\b|auf lager|en stock|op voorraad|"
+                     r"in stock|il n'en reste|ne rimangono|solo \d+ |nur noch|quedan solo|nog maar|"
+                     r"\bdisponible\b)")
+_AMZ_TITLE = re.compile(r"(?i)apple iphone duo\s+(\d+)\s*(gb|go|tb|to)\b")
+
+
+def _txt(x):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", x))).strip()
+
+
+def _amz_blocked(t):
+    return len(t) < 30000 or "captcha" in t.lower() or "/errors/validateCaptcha" in t
+
+
+def amazon_domain(dom, state):
+    """Controlla un dominio Amazon. Ritorna {chiave: (descrizione, url)} o None se bloccato."""
+    lang = AMAZON[dom]
+    al = f"{lang},{lang[:2]};q=0.9"
+    s = new_session(random.choice(["chrome", "safari"]) if _cffi else "chrome")
+    base = f"https://www.amazon.{dom}"
+    asins = dict(AMAZON_ASIN_NOTI)
+    asins.update(state["amz_asins"])
+    try:
+        t = http_get(f"{base}/s?k=apple+iphone+duo", accept="text/html", lang=al, referer=None, session=s)
+        if not _amz_blocked(t):
+            for a in dict.fromkeys(re.findall(
+                    r'data-asin="(B0[A-Z0-9]{8})"[^>]*data-component-type="s-search-result"', t)):
+                m = re.search(r'data-asin="%s".{0,6000}?<h2[^>]*>(.*?)</h2>' % a, t, re.S)
+                title = _txt(m.group(1)) if m else ""
+                if _AMZ_TITLE.search(title):
+                    asins[a] = title
+                    state["amz_asins"][a] = title
+    except Exception:
+        pass
+    found, blocked = {}, 0
+    for asin, label in asins.items():
+        url = f"{base}/dp/{asin}"
+        try:
+            p = http_get(url, accept="text/html", lang=al, referer=None, session=s)
+        except Exception:
+            blocked += 1
+            continue
+        if _amz_blocked(p):
+            blocked += 1
+            continue
+        title_m = re.search(r'id="productTitle"[^>]*>(.*?)</span>', p, re.S)
+        title = _txt(title_m.group(1)) if title_m else label
+        if not _AMZ_TITLE.search(title) or not wanted(title):
+            continue
+        av_m = re.search(r'id="availability"[^>]*>(.*?)</div>', p, re.S)
+        avail = _txt(av_m.group(1)) if av_m else ""
+        cart = 'id="add-to-cart-button"' in p or 'id="buy-now-button"' in p
+        ok = cart and not _AMZ_NO.search(avail) and not _AMZ_PRE.search(avail) and \
+            (_AMZ_SI.search(avail) or (not avail and 'id="buy-now-button"' in p))
+        if not ok:
+            continue
+        price_m = re.search(r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)<', p, re.S)
+        sellers = [_txt(x) for x in re.findall(
+            r'class="[^"]*offer-display-feature-text-message[^"]*"[^>]*>(.*?)</span>', p, re.S)][:2]
+        model = _AMZ_TITLE.search(title).group(0)[len("apple iphone duo"):].strip()
+        color = title.split("-")[-1].split("–")[-1].strip()[:30]
+        desc = (f"Amazon.{dom}: iPhone Duo {model} {color} - {price_m.group(1).strip() if price_m else '?'}"
+                + (f"\nSpedito/venduto da: {' / '.join(sellers)}" if sellers else "")
+                + (f"\n{avail[:80]}" if avail else ""))
+        found[f"amz|{dom}|{asin}"] = (desc, url)
+        time.sleep(1.5)
+    if blocked and blocked == len(asins):
+        return None
+    return found
+
+
+def amazon_tick(state, all_domains=False):
+    if not CONTROLLA_AMAZON:
+        return
+    doms = list(AMAZON)
+    todo = doms if all_domains else [doms[state["amz_idx"] % len(doms)]]
+    state["amz_idx"] = (state["amz_idx"] + 1) % len(doms)
+    for dom in todo:
+        try:
+            found = amazon_domain(dom, state)
+        except Exception as e:
+            log(f"Amazon.{dom}: errore ({e})")
+            continue
+        if found is None:
+            log(f"Amazon.{dom}: non raggiungibile da qui (anti-bot)")
+            continue
+        prev = {k for k in state["notified_amz"] if k.startswith(f"amz|{dom}|")}
+        for k in sorted(set(found) - prev):
+            desc, url = found[k]
+            notify("iPhone Duo DISPONIBILE su Amazon!", desc + "\nControlla venditore e spedizione in Italia.",
+                   click=url)
+            log("AMAZON DISPONIBILE -> " + desc.replace("\n", " | ") + " " + url)
+        if not found:
+            log(f"Amazon.{dom}: niente disponibile")
+        state["notified_amz"] = sorted(({k for k in state["notified_amz"] if not k.startswith(f"amz|{dom}|")}
+                                        | set(found)))
+
+
+# ---------------------------- Stato e ciclo ----------------------------
+
 def retail_tick(state):
     if not CONTROLLA_RIVENDITORI or time.time() - state["last_retail"] < RIVENDITORI_OGNI_SEC:
         return
@@ -206,8 +380,7 @@ def retail_tick(state):
     except Exception as e:
         log(f"Rivenditori: errore ({e})")
         return
-    new = set(found) - set(state["notified_retail"])
-    for k in sorted(new):
+    for k in sorted(set(found) - set(state["notified_retail"])):
         desc, url = found[k]
         notify("iPhone Duo DISPONIBILE online!", desc + "\nCompra subito dal link.", click=url)
         log("RIVENDITORE DISPONIBILE -> " + desc + " " + url)
@@ -222,11 +395,10 @@ def load_state():
             state = json.load(f)
     except Exception:
         state = {}
-    state.setdefault("notified", [])
-    state.setdefault("errors", 0)
-    state.setdefault("started", False)
-    state.setdefault("last_retail", 0)
-    state.setdefault("notified_retail", [])
+    for k, v in {"notified": [], "errors": 0, "started": False, "last_retail": 0,
+                 "notified_retail": [], "notified_amz": [], "amz_idx": 0, "amz_asins": {},
+                 "last_update_check": 0}.items():
+        state.setdefault(k, v)
     return state
 
 
@@ -238,24 +410,25 @@ def save_state(state):
         log(f"Stato non salvato ({e})")
 
 
-def tick(state, where):
+def tick(state):
     retail_tick(state)
+    amazon_tick(state)
     try:
-        available, n_stores = check()
+        available, desc = check()
         if not state["started"]:
-            notify(f"Monitor iPhone Duo attivo ({where})",
-                   f"Controllo {n_stores} Apple Store italiani ogni minuto circa. "
+            notify(f"Monitor iPhone Duo attivo ({WHERE})",
+                   "Controllo Apple Store, Unieuro, MediaWorld e Amazon. "
                    "Se leggi questo, le notifiche funzionano.",
                    priority="default", tags="white_check_mark")
             state["started"] = True
         hits = {k: v for k, v in available.items()
                 if wanted(v["model"])
                 and (MAX_KM is None or v["km"] is None or v["km"] <= MAX_KM)}
-        other = {k: v for k, v in available.items() if k not in hits}
         already = {tuple(x) for x in state["notified"]}
         if set(hits) - already:
             rows = sorted(hits.items(), key=lambda kv: (kv[1]["km"] is None, kv[1]["km"] or 0))
-            lines = [f"{v['model']} - Apple {store} ({v['city']}"
+            lines = [f"{v['model']} - {store}" if v.get("raw") else
+                     f"{v['model']} - Apple {store} ({v['city']}"
                      + (f", {v['km']:.0f} km" if v["km"] is not None else "") + ")"
                      for (store, _), v in rows[:8]]
             notify("iPhone Duo DISPONIBILE al ritiro!", "\n".join(lines) +
@@ -264,54 +437,75 @@ def tick(state, where):
         elif hits:
             log(f"Ancora disponibile ({len(hits)} slot, gia' notificato)")
         else:
-            extra = f" (altre capacita' disponibili: {len(other)})" if other else ""
-            log(f"Nessuna disponibilita' in {n_stores} negozi{extra}")
+            log(f"Nessuna disponibilita' in {desc}")
         state["notified"] = [list(k) for k in hits]
         state["errors"] = 0
         return True
     except Exception as e:
         state["errors"] += 1
-        detail = ""
-        if hasattr(e, "read"):
-            try:
-                detail = " | " + e.read()[:200].decode("utf-8", "replace").replace("\n", " ")
-            except Exception:
-                pass
-        log(f"Errore #{state['errors']}: {type(e).__name__}: {e}{detail}")
+        log(f"Errore #{state['errors']}: {type(e).__name__}: {str(e)[:200]}")
         if state["errors"] == 5:
-            notify("Monitor iPhone Duo: problema",
+            notify(f"Monitor iPhone Duo: problema ({WHERE})",
                    f"5 errori di fila (ultimo: {str(e)[:150]}). Il monitor continua a riprovare.",
                    priority="high", tags="warning")
         return False
 
 
+def self_update(state):
+    """Su computer: se su GitHub c'e' una versione nuova, la scarica e si riavvia."""
+    if WHERE == "GitHub" or not AUTO_AGGIORNAMENTO or time.time() - state["last_update_check"] < 600:
+        return
+    state["last_update_check"] = time.time()
+    try:
+        new = http_get(UPDATE_URL + f"?t={int(time.time())}", accept="text/plain", referer=None)
+        path = os.path.abspath(__file__)
+        with open(path, encoding="utf-8") as f:
+            cur = f.read()
+        if new.strip() == cur.strip() or "def amazon_tick" not in new:
+            return
+        compile(new, path, "exec")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+        save_state(state)
+        log("Nuova versione scaricata da GitHub: riavvio")
+        os.execv(sys.executable, [sys.executable, path] + sys.argv[1:])
+    except Exception as e:
+        log(f"Aggiornamento non riuscito ({e})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=float, default=0, help="durata, poi esce (0 = per sempre)")
-    ap.add_argument("--once", action="store_true", help="un solo controllo con elenco completo")
+    ap.add_argument("--once", action="store_true", help="un solo controllo completo")
     args = ap.parse_args()
-    where = "GitHub" if os.environ.get("GITHUB_ACTIONS") else "computer"
     if args.once:
-        available, n = check()
-        log(f"Negozi controllati: {n}")
+        available, desc = check()
+        log(f"Controllati: {desc}")
         for (store, part), v in sorted(available.items()):
             log(f"DISPONIBILE: {v['model']} - {store} ({v['city']})")
         if not available:
             log("Nessun iPhone Duo disponibile al ritiro in Italia")
-        if CONTROLLA_RIVENDITORI:
-            found = check_retailers()
-            for desc, url in found.values():
-                log(f"DISPONIBILE: {desc} {url}")
-            if not found:
-                log("Rivenditori (Unieuro, MediaWorld): niente disponibile")
+        for desc, url in check_retailers().values():
+            log(f"DISPONIBILE: {desc} {url}")
+        st = load_state()
+        st["notified_amz"] = []
+        for dom in AMAZON:
+            found = amazon_domain(dom, st)
+            if found is None:
+                log(f"Amazon.{dom}: non raggiungibile da qui (anti-bot)")
+            for desc, url in (found or {}).values():
+                log("DISPONIBILE: " + desc.replace("\n", " | ") + " " + url)
+            if found == {}:
+                log(f"Amazon.{dom}: niente disponibile")
         return
-    log(f"Avvio monitor iPhone Duo - {where} - curl_cffi: {'si' if _session else 'no'}")
+    log(f"Avvio monitor iPhone Duo - {WHERE} - curl_cffi: {'si' if _cffi else 'no'}")
     state = load_state()
     deadline = time.time() + args.minutes * 60 if args.minutes else None
     delay = INTERVALLO_SEC
     while True:
-        ok = tick(state, where)
+        ok = tick(state)
         save_state(state)
+        self_update(state)
         delay = INTERVALLO_SEC if ok else min(delay * 2, 600)
         wait = delay + random.uniform(-10, 10)
         if deadline and time.time() + wait > deadline:

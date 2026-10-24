@@ -10,38 +10,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Dettagli offerte Amazon
+      - uses: actions/checkout@v4
+      - name: Controllo completo una tantum
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 - > diag.txt 2>&1 <<'PY' || true
-          import re, time, html
-          from curl_cffi import requests as r
-          def clean(x): return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", x))).strip()
-          def grab(t, pat, n=160):
-              m = re.search(pat, t, re.S); return clean(m.group(1))[:n] if m else None
-          for dom, lang in {"com.be": "fr-BE", "nl": "nl-NL"}.items():
-              s = r.Session(impersonate="chrome")
-              H = {"Accept-Language": f"{lang},{lang[:2]};q=0.9"}
-              t = s.get(f"https://www.amazon.{dom}/s?k=apple+iphone+duo", headers=H, timeout=30).text
-              asins = []
-              for a in dict.fromkeys(re.findall(r'data-asin="(B0[A-Z0-9]{8})"[^>]*data-component-type="s-search-result"', t)):
-                  m = re.search(r'data-asin="%s".{0,6000}?<h2[^>]*>(.*?)</h2>' % a, t, re.S)
-                  ttl = clean(m.group(1)) if m else ""
-                  if re.search(r"(?i)^apple iphone duo \d", ttl): asins.append((a, ttl))
-              print(f"== amazon.{dom}: {len(asins)} iPhone Duo")
-              for a, ttl in asins:
-                  p = s.get(f"https://www.amazon.{dom}/dp/{a}", headers=H, timeout=30).text
-                  print(f"-- {a} {ttl[:60]}")
-                  print("   avail:", grab(p, r'id="availability"[^>]*>(.*?)</div>'))
-                  print("   price:", grab(p, r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)<'), "|", grab(p, r'class="a-price aok-align-center[^"]*".*?<span class="a-offscreen">([^<]+)<'))
-                  print("   merchant:", grab(p, r'id="merchantInfoFeature_feature_div"(.*?)</div>\s*</div>', 200), "|", grab(p, r'id="sellerProfileTriggerId"[^>]*>(.*?)</a>'))
-                  print("   ships:", grab(p, r'id="fulfillerInfoFeature_feature_div"(.*?)</div>\s*</div>', 120))
-                  print("   delivery:", grab(p, r'id="mir-layout-DELIVERY_BLOCK"(.*?)</div>', 200))
-                  print("   cart:", "add-to-cart-button" in p, "| buybox other sellers:", grab(p, r'id="olpLinkWidget_feature_div"(.*?)</div>', 120))
-                  time.sleep(2)
-          PY
+          python3 -u duo_alert.py --once > diag.txt 2>&1 || true
           cat diag.txt
-
       - name: Pubblica risultato
         if: always()
         run: |
