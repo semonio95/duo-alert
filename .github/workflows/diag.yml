@@ -6,45 +6,54 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Test endpoint ritiro con fae=true
+      - name: Installa strumenti
         run: |
-          pip install -q curl_cffi >/dev/null 2>&1
+          pip install -q curl_cffi playwright >/dev/null 2>&1
+          python3 -m playwright install --with-deps chromium >/dev/null 2>&1 && echo ok
+
+      - name: Test
+        run: |
           python3 - > diag.txt 2>&1 <<'EOF' || true
-          import json, urllib.request, urllib.parse
+          import json, time
+          Q = "/it/shop/fulfillment-messages?fae=true&pl=true&mts.0=regular&mts.1=compact&location=00191&parts.0=MK2D4QL/A&parts.1=MK2E4QL/A"
+          PAGE = "https://www.apple.com/it/shop/buy-iphone/iphone-duo/display-da-7,6%22-256gb-bianco-stellare"
+          # A) curl_cffi con sessione e header del sito
           from curl_cffi import requests as r
-          BUY = "https://www.apple.com/it/shop/buy-iphone/iphone-duo"
-          base = "https://www.apple.com/it/shop/fulfillment-messages"
-          params = {"fae": "true", "pl": "true", "mts.0": "regular", "mts.1": "compact",
-                    "location": "00191", "parts.0": "MK2D4QL/A", "parts.1": "MK2E4QL/A"}
-          q = base + "?" + urllib.parse.urlencode(params)
-          UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
-          # 1) urllib puro (come lo script)
-          try:
-              req = urllib.request.Request(q, headers={"User-Agent": UA, "Accept": "application/json", "Accept-Language": "it-IT,it;q=0.9", "Referer": BUY})
-              with urllib.request.urlopen(req, timeout=25) as resp:
-                  t = resp.read().decode("utf-8", "replace")
-                  print("== urllib", resp.status, len(t)); print(t[:300])
-          except Exception as e:
-              print("== urllib ERRORE", e)
-          # 2) curl_cffi
           s = r.Session(impersonate="chrome")
-          f = s.get(q, headers={"Accept": "application/json", "Referer": BUY}, timeout=30)
-          print("== cffi", f.status_code, len(f.text))
-          try:
-              d = f.json()
-              stores = d["body"]["content"]["pickupMessage"]["stores"]
-              print("negozi:", len(stores))
-              for st in stores[:20]:
-                  pa = st.get("partsAvailability", {})
-                  row = {p: (v.get("pickupDisplay"), (v.get("messageTypes", {}).get("regular", {}) or {}).get("storePickupProductTitle"), v.get("pickupSearchQuote")) for p, v in pa.items()}
-                  print(st.get("storeName"), st.get("storedistance"), st.get("storeDistanceWithUnit"), json.dumps(row, ensure_ascii=False))
-              print("chiavi store:", sorted(stores[0].keys()) if stores else None)
-          except Exception as e:
-              print("parse errore:", e); print(f.text[:1500])
+          p = s.get(PAGE, timeout=30)
+          print("A page", p.status_code, "cookie:", sorted(s.cookies.keys()))
+          f = s.get("https://www.apple.com" + Q, headers={"Accept": "*/*", "Referer": PAGE,
+                    "x-aos-ui-fetch-call-1": "x", "x-skip-redirect": "true",
+                    "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty"}, timeout=30)
+          print("A fulfillment", f.status_code, f.text[:200].replace("\n", " "))
+          # B) Chromium vero (Playwright): fetch dalla pagina stessa
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as pw:
+              br = pw.chromium.launch()
+              ctx = br.new_context(locale="it-IT", user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
+              pg = ctx.new_page()
+              seen = []
+              pg.on("response", lambda resp: seen.append((resp.status, resp.url)) if ("fulfillment" in resp.url or "pickup" in resp.url) else None)
+              pg.goto(PAGE, wait_until="domcontentloaded", timeout=60000)
+              time.sleep(8)
+              print("B richieste ritiro fatte dalla pagina:", seen[:10])
+              print("B cookie:", sorted(c["name"] for c in ctx.cookies()))
+              res = pg.evaluate("""async (q) => { const r = await fetch(q, {headers: {'Accept': 'application/json'}}); return [r.status, (await r.text()).slice(0, 4000)]; }""", Q)
+              print("B fetch in pagina", res[0])
+              try:
+                  d = json.loads(res[1])
+                  st = d["body"]["content"]["pickupMessage"]["stores"]
+                  print("B negozi:", len(st))
+                  for x in st[:12]:
+                      pa = {k: (v.get("pickupDisplay"), v.get("pickupSearchQuote")) for k, v in (x.get("partsAvailability") or {}).items()}
+                      print("  ", x.get("storeName"), x.get("storeDistanceWithUnit"), pa)
+              except Exception as e:
+                  print("B parse", e, res[1][:300].replace("\n", " "))
+              br.close()
           EOF
           cat diag.txt
 
