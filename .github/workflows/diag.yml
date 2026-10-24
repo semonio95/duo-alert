@@ -1,0 +1,67 @@
+name: diag
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - name: Prove
+        run: |
+          pip install -q curl_cffi >/dev/null 2>&1
+          python3 - > diag.txt 2>&1 <<'EOF' || true
+          import re, json
+          from urllib.parse import urljoin
+          from curl_cffi import requests as r
+          s = r.Session(impersonate="chrome")
+          H = {"Accept": "application/json, text/plain, */*", "Accept-Language": "it-IT,it;q=0.9"}
+          P = "parts.0=MK2D4QL/A&parts.1=MK2E4QL/A"
+          tests = [
+            "https://www.apple.com/it/shop/pickup-message-recommendations?fae=true&mts.0=regular&location=00191&product=MK2D4QL/A",
+            "https://www.apple.com/it/shop/sba/availability-message?parts.0=MK2D4QL/A&location=00191",
+            "https://www.apple.com/it/shop/fulfillment-messages?fae=true&pl=true&little=false&mts.0=regular&searchNearby=true&location=00191&" + P,
+            "https://secure.store.apple.com/it/shop/fulfillment-messages?fae=true&pl=true&mts.0=regular&location=00191&" + P,
+            "https://www.apple.com/it/shop/retail/pickup-message?pl=true&location=00191&" + P,
+          ]
+          s.get("https://www.apple.com/it/shop/buy-iphone/iphone-duo", timeout=30)
+          for u in tests:
+              try:
+                  x = s.get(u, headers={**H, "Referer": "https://www.apple.com/it/shop/buy-iphone/iphone-duo"}, timeout=30)
+                  print("APPLE", x.status_code, len(x.text), u[:110]); print("   ", x.text[:250].replace("\n", " "))
+              except Exception as e:
+                  print("APPLE ERR", u[:110], e)
+          # iPhoneStockChecker: cerca gli endpoint usati dalla pagina
+          base = "https://iphonestockchecker.com/"
+          h = s.get(base, timeout=30)
+          print("\nISC home", h.status_code, len(h.text))
+          srcs = re.findall(r'<script[^>]+src="([^"]+)"', h.text)
+          inline = re.findall(r'<script[^>]*>(.*?)</script>', h.text, re.S)
+          blobs = ["\n".join(inline)]
+          for sc in srcs[:25]:
+              try:
+                  j = s.get(urljoin(base, sc), timeout=30); blobs.append(j.text); print("js", j.status_code, len(j.text), sc[:100])
+              except Exception as e:
+                  print("js err", sc, e)
+          allt = "\n".join(blobs)
+          found = set()
+          for m in re.finditer(r'''["'`](/(?:api|functions|\.netlify|_next/data|data)[^"'`\s]{0,120}|https?://[a-z0-9.\-]+(?:/[^"'`\s]{0,120})?)["'`]''', allt):
+              v = m.group(1)
+              if any(k in v for k in ["api", "stock", "avail", "pickup", "store", "functions", "supabase", "firebase", "workers"]):
+                  found.add(v)
+          print("ENDPOINT CANDIDATI:"); [print("  ", f) for f in sorted(found)[:80]]
+          for m in re.finditer(r'fetch\(([^)]{0,200})\)', allt):
+              print("FETCH:", m.group(1)[:200])
+          EOF
+          cat diag.txt
+
+      - name: Pubblica risultato
+        if: always()
+        run: |
+          mkdir -p /tmp/l && cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m diag
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag
