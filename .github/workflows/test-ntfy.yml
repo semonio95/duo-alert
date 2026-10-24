@@ -1,0 +1,19 @@
+name: test-ntfy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Notifica di prova
+        run: |
+          curl -sS -o /dev/null -w "ntfy HTTP %{http_code}\n" \
+            -H "Title: Prova notifica iPhone Duo" -H "Priority: urgent" -H "Tags: iphone,white_check_mark" \
+            -H "Click: https://www.apple.com/it/shop/buy-iphone/iphone-duo" \
+            -d "Se leggi questo, le notifiche del monitor ti arrivano. Questa e' solo una prova." \
+            "https://ntfy.sh/${NTFY_TOPIC:-duo-alert-7q4k9x2mzt}"
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
