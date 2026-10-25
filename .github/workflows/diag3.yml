@@ -1,0 +1,43 @@
+name: diag3
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - name: Contatti e annullamento R-Store
+        run: |
+          pip install -q curl_cffi >/dev/null 2>&1
+          python3 - > diag.txt 2>&1 <<'PY' || true
+          import re, html, time
+          from curl_cffi import requests as r
+          s = r.Session(impersonate="chrome")
+          H = {"Accept-Language": "it-IT,it;q=0.9"}
+          def txt(x): return re.sub(r"\s+", " ", html.unescape(re.sub(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", " ", x, flags=re.S))).strip()
+          home = s.get("https://www.rstore.it/", headers=H, timeout=30).text
+          links = sorted(set(re.findall(r'href="(/(?:pages|policies|blogs)/[^"#?]+)"', home)))
+          print("LINK:", links)
+          cand = [l for l in links if re.search(r"(?i)contatt|assist|faq|domand|ordin|annull|help|supporto|reso|spediz", l)]
+          for extra in ["/pages/faq", "/pages/assistenza", "/pages/contattaci", "/pages/domande-frequenti", "/pages/assistenza-clienti", "/policies/refund-policy", "/pages/stato-ordine", "/account"]:
+              if extra not in cand: cand.append(extra)
+          for l in cand[:20]:
+              x = s.get("https://www.rstore.it" + l, headers=H, timeout=30)
+              t = txt(x.text)
+              print(f"\n== {l} {x.status_code} len={len(t)}")
+              if x.status_code != 200: continue
+              for pat in [r"(?i)[^.]{0,200}annull[^.]{0,250}\.", r"(?i)[^.]{0,120}cancell[^.]{0,200}\.", r"[\w.+-]+@[\w-]+\.[\w.]+", r"(?i)(?:tel\.?|telefono|numero verde|chiama)[^.]{0,80}\d[\d\s]{6,}", r"(?i)whatsapp[^.]{0,120}", r"(?i)(?:lun|luned)[^.]{0,120}"]:
+                  hits = list(dict.fromkeys(m.strip() for m in re.findall(pat, t)))[:4]
+                  for h in hits: print("   ", h[:300])
+              time.sleep(1)
+          PY
+          cat diag.txt
+      - name: Pubblica risultato
+        if: always()
+        run: |
+          mkdir -p /tmp/l && cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m diag
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag
