@@ -36,8 +36,8 @@ from datetime import datetime
 # ======================= CONFIGURAZIONE =======================
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC") or "duo-alert-7q4k9x2mzt"
 INTERVALLO_SEC = 60                  # ogni quanto controllare (+/- 10 s casuali)
-# Nel cloud: controllo veloce dei negozi di Roma ogni ~20 s; tutta Italia ogni 3 giri.
-ROMA_VELOCE_SEC = 20
+# Nel cloud: controllo veloce dei negozi di Roma ogni ~30 s (a 20 s Apple blocca dopo ~7 min); tutta Italia ogni 3 giri.
+ROMA_VELOCE_SEC = 30
 TUTTA_ITALIA_OGNI = 3
 SOLO_CAPACITA = []                   # es. ["256GB"]; [] = qualsiasi capacita'
 SOLO_COLORI = []                     # es. ["bianco"] oppure ["notturno"]; [] = entrambi
