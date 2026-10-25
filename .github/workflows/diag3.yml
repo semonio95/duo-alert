@@ -17,20 +17,12 @@ jobs:
           s = r.Session(impersonate="chrome")
           H = {"Accept-Language": "it-IT,it;q=0.9"}
           def txt(x): return re.sub(r"\s+", " ", html.unescape(re.sub(r"<(script|style)[^>]*>.*?</\1>|<[^>]+>", " ", x, flags=re.S))).strip()
-          home = s.get("https://www.rstore.it/", headers=H, timeout=30).text
-          links = sorted(set(re.findall(r'href="(/(?:pages|policies|blogs)/[^"#?]+)"', home)))
-          print("LINK:", links)
-          cand = [l for l in links if re.search(r"(?i)contatt|assist|faq|domand|ordin|annull|help|supporto|reso|spediz", l)]
-          for extra in ["/pages/faq", "/pages/assistenza", "/pages/contattaci", "/pages/domande-frequenti", "/pages/assistenza-clienti", "/policies/refund-policy", "/pages/stato-ordine", "/account"]:
-              if extra not in cand: cand.append(extra)
-          for l in cand[:20]:
-              x = s.get("https://www.rstore.it" + l, headers=H, timeout=30)
-              t = txt(x.text)
-              print(f"\n== {l} {x.status_code} len={len(t)}")
-              if x.status_code != 200: continue
-              for pat in [r"(?i)[^.]{0,200}annull[^.]{0,250}\.", r"(?i)[^.]{0,120}cancell[^.]{0,200}\.", r"[\w.+-]+@[\w-]+\.[\w.]+", r"(?i)(?:tel\.?|telefono|numero verde|chiama)[^.]{0,80}\d[\d\s]{6,}", r"(?i)whatsapp[^.]{0,120}", r"(?i)(?:lun|luned)[^.]{0,120}"]:
-                  hits = list(dict.fromkeys(m.strip() for m in re.findall(pat, t)))[:4]
-                  for h in hits: print("   ", h[:300])
+          for l in ["/pages/contattaci", "/pages/assistenza", "/pages/spedizione-e-ritiro"]:
+              raw = s.get("https://www.rstore.it" + l, headers=H, timeout=30).text
+              main = re.search(r"<main.*?</main>", raw, re.S)
+              t = txt(main.group(0) if main else raw)
+              print(f"\n== {l}\n", t[:2500])
+              print("   mailto:", sorted(set(re.findall(r'mailto:([^"?]+)', raw))), "| tel:", sorted(set(re.findall(r'tel:([^"]+)', raw))), "| wa:", sorted(set(re.findall(r'(?:wa\.me|whatsapp)[^"\s]*', raw)))[:3])
               time.sleep(1)
           PY
           cat diag.txt
