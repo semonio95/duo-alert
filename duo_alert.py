@@ -3,7 +3,7 @@
 duo_alert.py - Notifica push sull'iPhone quando un iPhone Duo diventa
 disponibile:
   - ritiro in uno dei 17 Apple Store italiani (ogni minuto circa)
-  - Unieuro e MediaWorld online (ogni ~5 minuti)
+  - Unieuro, MediaWorld e R-Store online (ogni ~5 minuti)
   - Amazon Italia, Germania, Francia, Spagna (a rotazione, solo da computer)
 
 Gira sia su GitHub Actions (cloud, gratis) sia su un computer.
@@ -42,7 +42,7 @@ MAX_KM = None                        # es. 30 = solo negozi di Roma; None = tutt
 CASA = (41.94, 12.53)                # coordinate approssimative del CAP 00191
 LOCALITA = ["00191", "20121", "95131"]   # insieme coprono tutti i 17 Apple Store italiani
 CONTROLLA_RIVENDITORI = True         # Unieuro e MediaWorld online
-RIVENDITORI_OGNI_SEC = 290
+RIVENDITORI_OGNI_SEC = 170
 CONTROLLA_AMAZON = True              # un Paese Amazon per giro, a rotazione (solo da computer)
 # Dal computer Apple va controllato meno spesso: la connessione di casa viene bloccata
 # (errore 541) se interroga Apple ogni minuto. Il cloud controlla Apple ogni minuto.
@@ -265,6 +265,19 @@ def check_retailers():
         if m and m.group(1).lower() in _IN_STOCK:
             found["mediaworld|" + label] = (f"MediaWorld online: {label}", url)
         time.sleep(1)
+    for part, model in MODELLI.items():
+        if not wanted(model):
+            continue
+        url = f"https://www.rstore.it/products/iphone-duo-{part[:5].lower()}ql-a"
+        try:
+            j = json.loads(http_get(url + ".js", accept="application/json", referer=None))
+        except Exception as e:
+            log(f"R-Store {model}: pagina non letta ({getattr(e, 'code', e)})")
+            continue
+        if j.get("available") or any(v.get("available") for v in j.get("variants", [])):
+            price = (j.get("price") or 0) / 100
+            found["rstore|" + part] = (f"R-Store online: {model} - {price:,.0f} EUR".replace(",", "."), url)
+        time.sleep(0.5)
     return found
 
 
@@ -390,7 +403,7 @@ def retail_tick(state):
         notify("iPhone Duo DISPONIBILE online!", desc + "\nCompra subito dal link.", click=url)
         log("RIVENDITORE DISPONIBILE -> " + desc + " " + url)
     if not found:
-        log("Rivenditori (Unieuro, MediaWorld): niente disponibile")
+        log("Rivenditori (Unieuro, MediaWorld, R-Store): niente disponibile")
     state["notified_retail"] = sorted(found)
 
 

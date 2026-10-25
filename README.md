@@ -1,6 +1,6 @@
 # duo-alert
 
-Notifica push (app ntfy) quando un iPhone Duo diventa ritirabile in uno dei 17 Apple Store italiani, o acquistabile subito su Unieuro, MediaWorld o Amazon (IT, DE, FR, ES — controllati dal computer). Su computer si aggiorna da solo.
+Notifica push (app ntfy) quando un iPhone Duo diventa ritirabile in uno dei 17 Apple Store italiani, o acquistabile subito su Unieuro, MediaWorld, R-Store o Amazon (IT, DE, FR, ES — controllati dal computer). Su computer si aggiorna da solo.
 
 - **Cloud (GitHub Actions):** il workflow `monitor` parte ogni 5 minuti e controlla circa ogni minuto. L'ultimo log è nel branch `logs`.
 - **Computer:** `pip install curl_cffi && python3 duo_alert.py`
