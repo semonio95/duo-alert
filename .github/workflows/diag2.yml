@@ -18,37 +18,19 @@ jobs:
           from curl_cffi import requests as r
           s = r.Session(impersonate="chrome")
           H = {"Accept-Language": "it-IT,it;q=0.9"}
-          U = {
-           "rstore-suggest": "https://www.rstore.it/search/suggest.json?q=iphone%20duo&resources[type]=product&resources[limit]=10",
-           "euronics": "https://www.euronics.it/search?q=iphone+duo",
-           "comet": "https://www.comet.it/search?q=iphone%20duo",
-           "expert": "https://www.expertonline.it/search?q=iphone+duo",
-           "trony": "https://www.trony.it/online/search?q=iphone%20duo",
-           "monclick": "https://www.monclick.it/ricerca?q=iphone+duo",
-           "eprice": "https://www.eprice.it/sa/?qs=iphone+duo",
-           "yeppon": "https://www.yeppon.it/ricerca?q=iphone+duo",
-           "tim": "https://www.tim.it/fisso-e-mobile/mobile/smartphone/apple",
-           "vodafone": "https://www.vodafone.it/privati/offerte-smartphone/apple.html",
-           "windtre": "https://www.windtre.it/smartphone/apple/",
-           "iliad": "https://www.iliad.it/smartphone.html",
-           "fastweb": "https://www.fastweb.it/smartphone-e-tablet/",
-           "very-mobile": "https://verymobile.it/smartphone",
-          }
-          for k, u in U.items():
-              try:
-                  x = s.get(u, headers=H, timeout=30)
-                  t = x.text
-                  duo = len(re.findall(r"(?i)iphone[\s\-_]*duo", t))
-                  kw = sorted(set(m.lower() for m in re.findall(r"(?i)(esaurit[oa]|non disponibile|disponibile|aggiungi al carrello|in stock|outofstock|instock|preorder|preordin\w*|avvisami)", t)))[:8]
-                  print(f"{k:12} {x.status_code} len={len(t):7} duo={duo:3} kw={kw} url={x.url[:90]}")
-                  if k == "rstore-suggest":
-                      try:
-                          for p in x.json()["resources"]["results"]["products"]:
-                              print("     ", p.get("title"), "| available:", p.get("available"), "| handle:", p.get("handle"), "| price:", p.get("price"))
-                      except Exception as e:
-                          print("      parse", e, t[:200])
-              except Exception as e:
-                  print(f"{k:12} ERR {e}")
+          for code in ["mk2d4ql-a","mk2e4ql-a","mk2f4ql-a","mk2g4ql-a","mk2h4ql-a","mk2j4ql-a","mk2k4ql-a","mk2l4ql-a"]:
+              u = f"https://www.rstore.it/products/iphone-duo-{code}"
+              x = s.get(u + ".js", headers=H, timeout=30)
+              if x.status_code != 200:
+                  print(code, x.status_code); continue
+              j = x.json()
+              print(code, "|", j.get("title"), "| available:", j.get("available"), "| tags:", [t for t in j.get("tags", []) if any(k in t.lower() for k in ("pre", "disp", "stock", "ordin", "arriv"))][:6])
+              for v in j.get("variants", []):
+                  print("    variant", v.get("id"), v.get("title"), "| available:", v.get("available"), "| price:", v.get("price"), "| inv_mgmt:", v.get("inventory_management"), "| policy:", v.get("inventory_policy"))
+              pg = s.get(u, headers=H, timeout=30).text
+              for pat in [r"(?i)(preordin[^<]{0,80})", r"(?i)(disponibile[^<]{0,80})", r"(?i)(esaurit[^<]{0,60})", r"(?i)(spedizione[^<]{0,80})", r"(?i)(consegna[^<]{0,80})", r"(?i)(aggiungi al carrello)", r"(?i)(avvisami[^<]{0,40})"]:
+                  m = re.findall(pat, pg)
+                  if m: print("    page:", list(dict.fromkeys(x.strip() for x in m))[:3])
               time.sleep(1)
           PY
           cat diag.txt
