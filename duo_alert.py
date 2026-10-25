@@ -36,6 +36,9 @@ from datetime import datetime
 # ======================= CONFIGURAZIONE =======================
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC") or "duo-alert-7q4k9x2mzt"
 INTERVALLO_SEC = 60                  # ogni quanto controllare (+/- 10 s casuali)
+# Nel cloud: controllo veloce dei negozi di Roma ogni ~20 s; tutta Italia ogni 3 giri.
+ROMA_VELOCE_SEC = 20
+TUTTA_ITALIA_OGNI = 3
 SOLO_CAPACITA = []                   # es. ["256GB"]; [] = qualsiasi capacita'
 SOLO_COLORI = []                     # es. ["bianco"] oppure ["notturno"]; [] = entrambi
 MAX_KM = None                        # es. 30 = solo negozi di Roma; None = tutta Italia
@@ -160,9 +163,9 @@ def km_da_casa(store):
     return 6371 * 2 * math.asin(math.sqrt(a))
 
 
-def _check_pickup():
+def _check_pickup(localita=None):
     available, seen = {}, set()
-    for loc in LOCALITA:
+    for loc in (localita or LOCALITA):
         params = {"pl": "true", "location": loc}
         for i, p in enumerate(MODELLI):
             params[f"parts.{i}"] = p
@@ -180,7 +183,10 @@ def _check_pickup():
                 if info.get("pickupDisplay") == "available":
                     available[(name, part)] = {"km": km, "city": s.get("city", ""),
                                                "model": MODELLI.get(part, part)}
-        time.sleep(1)
+        if len(localita or LOCALITA) > 1:
+            time.sleep(1)
+    _last_seen_stores.clear()
+    _last_seen_stores.update(seen)
     return available, f"{len(seen)} negozi"
 
 
@@ -202,13 +208,16 @@ def _check_sba():
 _pickup_pausa_fino = 0
 
 
-def check():
+_last_seen_stores = set()
+
+
+def check(localita=None):
     """Ritorna (disponibili, descrizione). disponibili = {(negozio, part): info}."""
     global _apple, _pickup_pausa_fino
     if time.time() < _pickup_pausa_fino:
         return _check_sba()
     try:
-        return _check_pickup()
+        return _check_pickup(localita)
     except urllib.error.HTTPError as e:
         if e.code not in (403, 429, 503, 541):
             raise
@@ -216,7 +225,7 @@ def check():
         _apple = new_session(random.choice(["chrome", "safari"]) if _cffi else "chrome")
         time.sleep(3)
         try:
-            return _check_pickup()
+            return _check_pickup(localita)
         except urllib.error.HTTPError as e2:
             if e2.code not in (403, 429, 503, 541):
                 raise
@@ -435,8 +444,11 @@ def tick(state):
         if time.time() - state["last_apple"] < APPLE_OGNI_SEC_COMPUTER:
             return True
     state["last_apple"] = time.time()
+    state["tick_n"] = state.get("tick_n", 0) + 1
+    veloce = WHERE == "GitHub" and state["tick_n"] % TUTTA_ITALIA_OGNI != 1
     try:
-        available, desc = check()
+        _last_seen_stores.clear()
+        available, desc = check(LOCALITA[:1] if veloce else None)
         if not state["started"]:
             notify(f"Monitor iPhone Duo attivo ({WHERE})",
                    "Controllo Apple Store, Unieuro, MediaWorld e Amazon. "
@@ -463,7 +475,9 @@ def tick(state):
             log(f"Ancora disponibile ({len(hits)} slot, gia' notificato)")
         else:
             log(f"Nessuna disponibilita' in {desc}")
-        state["notified"] = [list(k) for k in hits]
+        covered = set(_last_seen_stores)
+        keep = [x for x in state["notified"] if covered and x[0] not in covered]
+        state["notified"] = keep + [list(k) for k in hits]
         state["errors"] = 0
         return True
     except Exception as e:
@@ -526,13 +540,14 @@ def main():
     log(f"Avvio monitor iPhone Duo - {WHERE} - curl_cffi: {'si' if _cffi else 'no'}")
     state = load_state()
     deadline = time.time() + args.minutes * 60 if args.minutes else None
-    delay = INTERVALLO_SEC
+    base = ROMA_VELOCE_SEC if WHERE == "GitHub" else INTERVALLO_SEC
+    delay = base
     while True:
         ok = tick(state)
         save_state(state)
         self_update(state)
-        delay = INTERVALLO_SEC if ok else min(delay * 2, 600)
-        wait = delay + random.uniform(-10, 10)
+        delay = base if ok else min(delay * 2, 600)
+        wait = delay + random.uniform(-3, 3) if delay < 60 else delay + random.uniform(-10, 10)
         if deadline and time.time() + wait > deadline:
             break
         time.sleep(wait)
