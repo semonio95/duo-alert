@@ -6,15 +6,45 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Controllo completo una tantum
+      - name: Custodia Apple iPhone Duo - codici e ritiro
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 -u duo_alert.py --once > diag.txt 2>&1 || true
+          python3 - > diag.txt 2>&1 <<'PY' || true
+          import re, json, time, html
+          from curl_cffi import requests as r
+          s = r.Session(impersonate="chrome")
+          H = {"Accept-Language": "it-IT,it;q=0.9"}
+          urls = ["https://www.apple.com/it/shop/iphone/accessories/cases-protection",
+                  "https://www.apple.com/it/shop/accessories/all/cases-protection",
+                  "https://www.apple.com/it/search/custodia-iphone-duo?src=serp"]
+          found = {}
+          for u in urls:
+              x = s.get(u, headers=H, timeout=30); t = x.text.replace("\\u002F", "/")
+              print("==", x.status_code, len(t), u)
+              for m in re.finditer(r'/it/shop/product/([A-Z0-9]{5}ZM/A)/([a-z0-9\-]+)', t):
+                  if "duo" in m.group(2): found[m.group(1)] = m.group(2)
+              time.sleep(1)
+          print("PRODOTTI DUO:", json.dumps(found, indent=1))
+          for part, slug in found.items():
+              p = s.get(f"https://www.apple.com/it/shop/product/{part}/{slug}", headers=H, timeout=30).text
+              title = re.search(r"<title>(.*?)</title>", p, re.S)
+              price = re.search(r'"price"\s*:\s*"?([\d.,]+)', p)
+              print(f"-- {part} | {html.unescape(title.group(1)).strip()[:90] if title else ''} | prezzo {price.group(1) if price else '?'}")
+              q = {"pl": "true", "mts.0": "regular", "mts.1": "compact", "location": "00191", "parts.0": part}
+              y = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, headers={**H, "Accept": "application/json"}, timeout=30)
+              try:
+                  for st in y.json()["body"]["stores"][:4]:
+                      pa = st["partsAvailability"].get(part, {})
+                      reg = (pa.get("messageTypes") or {}).get("regular") or {}
+                      print(f"     {st['storeName']}: display={pa.get('pickupDisplay')} | quote={pa.get('pickupSearchQuote')!r} | store_quote={reg.get('storePickupQuote')!r} | buyable={pa.get('buyability')}")
+              except Exception as e:
+                  print("     pickup err", y.status_code, e, y.text[:200])
+              time.sleep(1)
+          PY
           cat diag.txt
       - name: Pubblica risultato
         if: always()
