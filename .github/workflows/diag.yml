@@ -6,39 +6,15 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
-      - name: Custodia Apple iPhone Duo - codici e ritiro
+      - uses: actions/checkout@v4
+      - name: Controllo singolo
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 - > diag.txt 2>&1 <<'PY' || true
-          import re, json, time, html
-          from curl_cffi import requests as r
-          s = r.Session(impersonate="chrome")
-          H = {"Accept-Language": "it-IT,it;q=0.9"}
-          chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXY"
-          cands = [f"MKR{c}4ZM/A" for c in chars]
-          for i in range(0, len(cands), 10):
-              chunk = cands[i:i+10]
-              q = {"pl": "true", "mts.0": "regular", "location": "00191"}
-              for j, pn in enumerate(chunk): q[f"parts.{j}"] = pn
-              y = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, headers={**H, "Accept": "application/json"}, timeout=30)
-              try:
-                  stores = y.json()["body"]["stores"]
-              except Exception as e:
-                  print("err", y.status_code, e); continue
-              pdr = next((st for st in stores if st["storeName"] == "Porta di Roma"), None)
-              for pn in chunk:
-                  infos = [st["partsAvailability"].get(pn) for st in stores if st["partsAvailability"].get(pn)]
-                  if not infos: continue
-                  reg = (infos[0].get("messageTypes") or {}).get("regular") or {}
-                  title = reg.get("storePickupProductTitle")
-                  pa = (pdr or {}).get("partsAvailability", {}).get(pn, {})
-                  print(f"{pn} | {title} | Porta di Roma: {pa.get('pickupDisplay')} / {pa.get('pickupSearchQuote')!r}")
-              time.sleep(1)
-          PY
+          python3 -u duo_alert.py --once > diag.txt 2>&1 || true
           cat diag.txt
       - name: Pubblica risultato
         if: always()

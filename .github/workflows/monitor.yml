@@ -29,7 +29,7 @@ jobs:
       - name: Installa curl_cffi
         run: pip install -q curl_cffi
 
-      - name: Controlla disponibilita' ritiro (tutta Italia)
+      - name: Alert custodia Blu marino - Porta di Roma, ritiro oggi
         run: python3 -u duo_alert.py --minutes 9 2>&1 | tee run.log
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
