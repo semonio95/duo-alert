@@ -18,22 +18,23 @@ jobs:
           from curl_cffi import requests as r
           s = r.Session(impersonate="chrome")
           H = {"Accept-Language": "it-IT,it;q=0.9"}
-          urls = ["https://www.apple.com/it/shop/iphone/accessories/cases-protection",
-                  "https://www.apple.com/it/shop/accessories/all/cases-protection",
-                  "https://www.apple.com/it/search/custodia-iphone-duo?src=serp"]
           found = {}
-          for u in urls:
-              x = s.get(u, headers=H, timeout=30); t = x.text.replace("\\u002F", "/")
-              print("==", x.status_code, len(t), u)
-              for m in re.finditer(r'/it/shop/product/([A-Z0-9]{5}ZM/A)/([a-z0-9\-]+)', t):
-                  if "duo" in m.group(2): found[m.group(1)] = m.group(2)
+          for q in ["custodia iphone duo", "iphone duo case", "folio iphone duo"]:
+              x = s.get("https://www.rstore.it/search/suggest.json", params={"q": q, "resources[type]": "product", "resources[limit]": "10"}, headers=H, timeout=30)
+              for prod in x.json()["resources"]["results"]["products"]:
+                  m = re.search(r"(m[a-z0-9]{4}zm-a)", prod.get("handle", ""))
+                  if m and "duo" in prod.get("title", "").lower():
+                      found[m.group(1).upper().replace("-A", "/A")] = prod.get("title") + " | " + str(prod.get("price"))
               time.sleep(1)
-          print("PRODOTTI DUO:", json.dumps(found, indent=1))
+          t = s.get("https://www.apple.com/it/shop/iphone/accessories/cases-protection", headers=H, timeout=30).text.replace("\\u002F", "/")
+          for m in re.finditer(r"(M[A-Z0-9]{4}ZM/A)", t):
+              ctx = t[max(0, m.start()-400): m.end()+400]
+              if "Duo" in ctx or "duo" in ctx:
+                  found.setdefault(m.group(1), "apple.com")
+          print("PRODOTTI DUO:", json.dumps(found, indent=1, ensure_ascii=False))
+          found = {k: "x" for k in found}
           for part, slug in found.items():
-              p = s.get(f"https://www.apple.com/it/shop/product/{part}/{slug}", headers=H, timeout=30).text
-              title = re.search(r"<title>(.*?)</title>", p, re.S)
-              price = re.search(r'"price"\s*:\s*"?([\d.,]+)', p)
-              print(f"-- {part} | {html.unescape(title.group(1)).strip()[:90] if title else ''} | prezzo {price.group(1) if price else '?'}")
+              print(f"-- {part}")
               q = {"pl": "true", "mts.0": "regular", "mts.1": "compact", "location": "00191", "parts.0": part}
               y = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, headers={**H, "Accept": "application/json"}, timeout=30)
               try:
