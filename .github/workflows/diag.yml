@@ -18,32 +18,25 @@ jobs:
           from curl_cffi import requests as r
           s = r.Session(impersonate="chrome")
           H = {"Accept-Language": "it-IT,it;q=0.9"}
-          found = {}
-          for q in ["custodia iphone duo", "iphone duo case", "folio iphone duo"]:
-              x = s.get("https://www.rstore.it/search/suggest.json", params={"q": q, "resources[type]": "product", "resources[limit]": "10"}, headers=H, timeout=30)
-              for prod in x.json()["resources"]["results"]["products"]:
-                  m = re.search(r"(m[a-z0-9]{4}zm-a)", prod.get("handle", ""))
-                  if m and "duo" in prod.get("title", "").lower():
-                      found[m.group(1).upper().replace("-A", "/A")] = prod.get("title") + " | " + str(prod.get("price"))
-              time.sleep(1)
-          t = s.get("https://www.apple.com/it/shop/iphone/accessories/cases-protection", headers=H, timeout=30).text.replace("\\u002F", "/")
-          for m in re.finditer(r"(M[A-Z0-9]{4}ZM/A)", t):
-              ctx = t[max(0, m.start()-400): m.end()+400]
-              if "Duo" in ctx or "duo" in ctx:
-                  found.setdefault(m.group(1), "apple.com")
-          print("PRODOTTI DUO:", json.dumps(found, indent=1, ensure_ascii=False))
-          found = {k: "x" for k in found}
-          for part, slug in found.items():
-              print(f"-- {part}")
-              q = {"pl": "true", "mts.0": "regular", "mts.1": "compact", "location": "00191", "parts.0": part}
+          chars = "0123456789ABCDEFGHJKLMNPQRSTUVWXY"
+          cands = [f"MKR{c}4ZM/A" for c in chars]
+          for i in range(0, len(cands), 10):
+              chunk = cands[i:i+10]
+              q = {"pl": "true", "mts.0": "regular", "location": "00191"}
+              for j, pn in enumerate(chunk): q[f"parts.{j}"] = pn
               y = s.get("https://www.apple.com/it/shop/retail/pickup-message", params=q, headers={**H, "Accept": "application/json"}, timeout=30)
               try:
-                  for st in y.json()["body"]["stores"][:4]:
-                      pa = st["partsAvailability"].get(part, {})
-                      reg = (pa.get("messageTypes") or {}).get("regular") or {}
-                      print(f"     {st['storeName']}: display={pa.get('pickupDisplay')} | quote={pa.get('pickupSearchQuote')!r} | store_quote={reg.get('storePickupQuote')!r} | buyable={pa.get('buyability')}")
+                  stores = y.json()["body"]["stores"]
               except Exception as e:
-                  print("     pickup err", y.status_code, e, y.text[:200])
+                  print("err", y.status_code, e); continue
+              pdr = next((st for st in stores if st["storeName"] == "Porta di Roma"), None)
+              for pn in chunk:
+                  infos = [st["partsAvailability"].get(pn) for st in stores if st["partsAvailability"].get(pn)]
+                  if not infos: continue
+                  reg = (infos[0].get("messageTypes") or {}).get("regular") or {}
+                  title = reg.get("storePickupProductTitle")
+                  pa = (pdr or {}).get("partsAvailability", {}).get(pn, {})
+                  print(f"{pn} | {title} | Porta di Roma: {pa.get('pickupDisplay')} / {pa.get('pickupSearchQuote')!r}")
               time.sleep(1)
           PY
           cat diag.txt
