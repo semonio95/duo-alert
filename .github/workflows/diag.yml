@@ -2,6 +2,10 @@ name: diag
 
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        type: string
+        default: duo_alert.py --once
 
 jobs:
   diag:
@@ -14,7 +18,7 @@ jobs:
       - name: Controllo singolo
         run: |
           pip install -q curl_cffi >/dev/null 2>&1
-          python3 -u duo_alert.py --once > diag.txt 2>&1 || true
+          python3 -u ${{ inputs.script || 'duo_alert.py --once' }} > diag.txt 2>&1 || true
           cat diag.txt
       - name: Pubblica risultato
         if: always()
