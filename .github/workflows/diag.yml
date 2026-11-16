@@ -17,13 +17,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Controllo singolo
         run: |
+          mkdir -p /tmp/l
           pip install -q curl_cffi >/dev/null 2>&1
           python3 -u ${{ inputs.script || 'duo_alert.py --once' }} > diag.txt 2>&1 || true
           cat diag.txt
       - name: Pubblica risultato
         if: always()
         run: |
-          mkdir -p /tmp/l && cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
+          cp diag.txt /tmp/l/diag.txt && cd /tmp/l && git init -q && git checkout -q -b diag
           git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
           git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m diag
           git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" diag
