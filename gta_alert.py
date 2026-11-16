@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC") or "duo-alert-7q4k9x2mzt"
 NOME = "DualSense GTA VI Bianco"
 QUERY = "dualsense grand theft auto vi bianco edizione limitata"
-ASIN_FISSI = [a for a in os.environ.get("GTA_ASIN", "").split(",") if a]
+ASIN_FISSI = [a for a in os.environ.get("GTA_ASIN", "B0HHS4DKRM").split(",") if a]
 INTERVALLO_SEC = 75
 STATE_FILE = os.environ.get("GTA_STATE_FILE", "gta_state.json")
 BASE = "https://www.amazon.it"
@@ -128,12 +128,15 @@ def save_state(st):
 def tick(st):
     s = sessione()
     try:
-        if not st["asin"] or time.time() - st["ultima_ricerca"] > 1800:
-            nuovi = cerca_asin(s)
-            st["asin"].update(nuovi)
+        if time.time() - st["ultima_ricerca"] > 3600:
             st["ultima_ricerca"] = time.time()
-            if nuovi:
-                log("ASIN trovati: " + ", ".join(nuovi))
+            try:
+                nuovi = {k: v for k, v in cerca_asin(s).items() if k not in st["asin"]}
+                st["asin"].update(nuovi)
+                if nuovi:
+                    log("Nuovi ASIN trovati: " + ", ".join(nuovi))
+            except Exception as e:
+                log(f"Ricerca saltata ({e})")
         asins = list(dict.fromkeys(ASIN_FISSI + list(st["asin"])))
         if not asins:
             raise RuntimeError("prodotto non trovato nella ricerca Amazon")
