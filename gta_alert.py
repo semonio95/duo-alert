@@ -89,24 +89,32 @@ def cerca_asin(s, verbose=False):
 
 
 def controlla(s, asin):
-    """Ritorna dict con stato del prodotto, oppure solleva se bloccato."""
+    """Ritorna dict con lo stato del prodotto; riprova con sessioni nuove se Amazon blocca."""
     url = f"{BASE}/dp/{asin}"
-    code, p = get(s, url)
-    if code >= 400 or BLOCCO.search(p):
+    for tentativo in range(5):
+        code, p = get(s, url)
+        if code < 400 and not BLOCCO.search(p) and 'id="productTitle"' in p:
+            break
+        s = sessione()
+        time.sleep(random.uniform(2, 5))
+    else:
         raise RuntimeError(f"pagina bloccata (HTTP {code})")
     tm = re.search(r'id="productTitle"[^>]*>(.*?)</span>', p, re.S)
     titolo = txt(tm.group(1)) if tm else ""
-    am = re.search(r'id="availability"[^>]*>(.*?)</div>', p, re.S)
-    disp = txt(am.group(1)) if am else ""
-    pm = re.search(r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)<', p, re.S)
+    esaurito = 'id="outOfStock"' in p
+    om = re.search(r'id="outOfStock".*?<span[^>]*>(.*?)</span>', p, re.S)
+    am = re.search(r'id="availability"[^>]*>\s*(?:<div id="all-offers-display".*?</form>\s*</div>)?(.*?)</div>', p, re.S)
+    disp = txt(om.group(1)) if esaurito and om else (txt(am.group(1)) if am else "")
+    pm = re.search(r'id="corePrice(?:Display_desktop)?_feature_div".*?<span class="a-offscreen">([^<]+)<', p, re.S) \
+        or re.search(r'<span class="a-price[^"]*"[^>]*data-a-color="price"[^>]*>\s*<span class="a-offscreen">([^<]+)<', p)
     prezzo = pm.group(1).strip() if pm else ""
     venditori = [txt(x) for x in re.findall(
         r'class="[^"]*offer-display-feature-text-message[^"]*"[^>]*>(.*?)</span>', p, re.S)][:2]
-    carrello = any(f'id="{b}"' in p for b in ("add-to-cart-button", "buy-now-button", "preorder-button"))
-    altri = re.search(r'id="buybox-see-all-buying-choices"|Vedi tutte le offerte|Disponibile presso questi venditori', p)
-    acquistabile = (carrello and not NO.search(disp)) or bool(altri and not carrello and prezzo)
+    carrello = bool(re.search(r'<input[^>]*id="(?:add-to-cart-button|buy-now-button|preorder-button|'
+                              r'add-to-cart-button-ubb)"', p))
+    ok = carrello or (not esaurito and bool(prezzo))
     return {"url": url, "titolo": titolo, "disp": disp, "prezzo": prezzo, "venditori": venditori,
-            "carrello": carrello, "altri": bool(altri), "ok": acquistabile}
+            "carrello": carrello, "esaurito": esaurito, "ok": ok}
 
 
 def load_state():

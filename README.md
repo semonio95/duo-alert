@@ -7,3 +7,7 @@ Notifica push (app ntfy) quando la **Custodia per iPhone Duo - Blu marino** (MKR
 - Su computer lo script non fa nulla e si chiude.
 
 Per fermarlo: Actions → monitor → "Disable workflow".
+
+## Alert DualSense GTA VI Bianco (Amazon.it)
+
+Il workflow `gta` controlla ogni ~75 secondi la pagina Amazon.it del **Controller DualSense – Grand Theft Auto VI Bianco Edizione limitata** (ASIN B0HHS4DKRM) e manda una notifica ntfy appena torna acquistabile (anche da altri venditori: la notifica riporta prezzo e venditore). Ultimo log nel branch `gta-logs`. Per fermarlo: Actions → gta → "Disable workflow".
