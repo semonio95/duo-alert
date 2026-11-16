@@ -1,0 +1,62 @@
+name: gta
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      once:
+        description: "Solo un controllo diagnostico"
+        type: boolean
+        default: false
+
+concurrency:
+  group: gta-${{ inputs.once && 'diag' || 'run' }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ripristina stato
+        uses: actions/cache/restore@v4
+        with:
+          path: gta_state.json
+          key: gta-state-${{ github.run_id }}
+          restore-keys: gta-state-
+
+      - name: Installa curl_cffi
+        run: pip install -q curl_cffi
+
+      - name: Alert DualSense GTA VI Bianco su Amazon.it
+        run: python3 -u gta_alert.py ${{ inputs.once && '--once' || '--minutes 9' }} 2>&1 | tee run.log
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+
+      - name: Salva stato
+        if: always() && !inputs.once
+        uses: actions/cache/save@v4
+        with:
+          path: gta_state.json
+          key: gta-state-${{ github.run_id }}
+
+      - name: Pubblica ultimo log (branch "gta-logs")
+        if: always()
+        run: |
+          mkdir -p /tmp/l && (cp run.log /tmp/l/ultimo_log.txt 2>/dev/null || echo "nessun log" > /tmp/l/ultimo_log.txt)
+          cd /tmp/l && git init -q && git checkout -q -b gta-logs
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" add .
+          git -c user.name="duo-alert" -c user.email="duo-alert@users.noreply.github.com" commit -q -m "Log run ${{ github.run_id }}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gta-logs
+
+      - name: Avvia il giro successivo (catena continua)
+        if: always() && !inputs.once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run gta.yml --ref main -R ${{ github.repository }}
